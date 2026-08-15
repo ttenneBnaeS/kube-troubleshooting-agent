@@ -1,10 +1,10 @@
-from anthropic import AsyncAnthropic
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from sse_starlette.sse import EventSourceResponse
 
 from api.schemas import ChatRequest
-from models.config import ModelTier, settings
+from models.config import ModelTier, get_chat_model
 from prompts import load_prompt
 
 app = FastAPI(title="Kubernetes Troubleshooting Agent")
@@ -16,7 +16,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-client = AsyncAnthropic(api_key=settings.anthropic_api_key)
+chat_model = get_chat_model(ModelTier.REASONING)
 
 
 @app.get("/api/health")
@@ -26,19 +26,17 @@ async def health() -> dict[str, str]:
 
 @app.post("/api/chat")
 async def chat(req: ChatRequest) -> EventSourceResponse:
-    messages = [{"role": m.role, "content": m.content} for m in req.history]
-    messages.append({"role": "user", "content": req.message})
+    messages: list[BaseMessage] = [SystemMessage(content=load_prompt("chat_v1"))]
+    for m in req.history:
+        role_cls = HumanMessage if m.role == "user" else AIMessage
+        messages.append(role_cls(content=m.content))
+    messages.append(HumanMessage(content=req.message))
 
     async def event_stream():
         try:
-            async with client.messages.stream(
-                model=settings.model_for(ModelTier.REASONING),
-                max_tokens=settings.max_tokens,
-                system=load_prompt("chat_v1"),
-                messages=messages,
-            ) as stream:
-                async for text in stream.text_stream:
-                    yield {"event": "token", "data": text}
+            async for chunk in chat_model.astream(messages):
+                if chunk.text:
+                    yield {"event": "token", "data": chunk.text}
         except Exception as exc:
             yield {"event": "error", "data": str(exc)}
             return

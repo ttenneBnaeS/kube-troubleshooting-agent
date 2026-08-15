@@ -7,6 +7,7 @@ steps. Node functions ask for a tier, never hardcode a model id.
 
 from enum import Enum
 
+from langchain_anthropic import ChatAnthropic
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -28,3 +29,18 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+
+def get_chat_model(tier: ModelTier, **kwargs) -> ChatAnthropic:
+    """Build a LangChain chat model for the given tier.
+
+    Centralized here (rather than instantiated per-node) so tier→model
+    routing and provider choice are a single edit, not a search-and-replace
+    across every graph node that needs a model.
+    """
+    return ChatAnthropic(
+        model=settings.model_for(tier),
+        anthropic_api_key=settings.anthropic_api_key,
+        max_tokens=settings.max_tokens,
+        **kwargs,
+    )
