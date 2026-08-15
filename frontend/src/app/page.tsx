@@ -1,0 +1,139 @@
+"use client";
+
+import { useState } from "react";
+
+type Message = { role: "user" | "assistant"; content: string };
+
+const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+
+async function streamChat(
+  message: string,
+  history: Message[],
+  onToken: (text: string) => void,
+) {
+  const res = await fetch(`${API_URL}/api/chat`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ message, history }),
+  });
+  if (!res.ok || !res.body) {
+    throw new Error(`chat request failed: ${res.status}`);
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+
+    const events = buffer.split("\n\n");
+    buffer = events.pop() ?? "";
+
+    for (const rawEvent of events) {
+      const dataLine = rawEvent.split("\n").find((l) => l.startsWith("data:"));
+      const eventLine = rawEvent.split("\n").find((l) => l.startsWith("event:"));
+      const eventName = eventLine?.slice("event:".length).trim();
+      const data = dataLine?.slice("data:".length).trim() ?? "";
+      if (eventName === "token" && data) onToken(data);
+      if (eventName === "error") throw new Error(data || "stream error");
+    }
+  }
+}
+
+export default function Home() {
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [input, setInput] = useState("");
+  const [pending, setPending] = useState(false);
+
+  async function send() {
+    const text = input.trim();
+    if (!text || pending) return;
+
+    const history = messages;
+    const userMsg: Message = { role: "user", content: text };
+    setMessages([...history, userMsg, { role: "assistant", content: "" }]);
+    setInput("");
+    setPending(true);
+
+    try {
+      await streamChat(text, history, (token) => {
+        setMessages((prev) => {
+          const next = [...prev];
+          const last = next[next.length - 1];
+          next[next.length - 1] = { ...last, content: last.content + token };
+          return next;
+        });
+      });
+    } catch (err) {
+      setMessages((prev) => {
+        const next = [...prev];
+        next[next.length - 1] = {
+          role: "assistant",
+          content: `Error: ${(err as Error).message}`,
+        };
+        return next;
+      });
+    } finally {
+      setPending(false);
+    }
+  }
+
+  return (
+    <div className="flex min-h-screen flex-col items-center bg-zinc-50 font-sans dark:bg-black">
+      <main className="flex w-full max-w-2xl flex-1 flex-col px-4 py-8">
+        <h1 className="mb-6 text-xl font-semibold text-black dark:text-zinc-50">
+          Kubernetes Troubleshooting Agent
+        </h1>
+
+        <div className="flex flex-1 flex-col gap-4 overflow-y-auto pb-4">
+          {messages.length === 0 && (
+            <p className="text-sm text-zinc-500">
+              No tools yet — this is a plain streaming round trip to the
+              model (Week 1).
+            </p>
+          )}
+          {messages.map((m, i) => (
+            <div
+              key={i}
+              className={
+                m.role === "user"
+                  ? "self-end rounded-2xl bg-black px-4 py-2 text-white dark:bg-zinc-50 dark:text-black"
+                  : "self-start rounded-2xl bg-zinc-200 px-4 py-2 text-black dark:bg-zinc-800 dark:text-zinc-50"
+              }
+            >
+              <p className="whitespace-pre-wrap text-sm">
+                {m.content || (pending && i === messages.length - 1 ? "…" : "")}
+              </p>
+            </div>
+          ))}
+        </div>
+
+        <form
+          className="mt-4 flex gap-2"
+          onSubmit={(e) => {
+            e.preventDefault();
+            void send();
+          }}
+        >
+          <input
+            className="flex-1 rounded-full border border-zinc-300 bg-white px-4 py-2 text-sm text-black outline-none focus:border-zinc-500 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-50"
+            placeholder="Describe what's going wrong..."
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            disabled={pending}
+          />
+          <button
+            type="submit"
+            className="rounded-full bg-black px-5 py-2 text-sm font-medium text-white disabled:opacity-50 dark:bg-zinc-50 dark:text-black"
+            disabled={pending || !input.trim()}
+          >
+            Send
+          </button>
+        </form>
+      </main>
+    </div>
+  );
+}
