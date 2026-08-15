@@ -1,0 +1,15 @@
+[project]
+name = "kube-troubleshooting-agent"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "anthropic>=0.122.0",
+    "fastapi>=0.141.1",
+    "pydantic>=2.13.4",
+    "pydantic-settings>=2.15.0",
+    "python-dotenv>=1.2.2",
+    "sse-starlette>=3.4.8",
+    "uvicorn[standard]>=0.52.3",
+]
