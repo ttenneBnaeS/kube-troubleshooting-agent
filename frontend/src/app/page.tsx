@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import ReactMarkdown from "react-markdown";
 
 type Message = { role: "user" | "assistant"; content: string };
 
@@ -27,16 +28,24 @@ async function streamChat(
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;
-    buffer += decoder.decode(value, { stream: true });
+    // SSE line endings may be CRLF; normalize before framing on blank lines.
+    buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, "\n");
 
     const events = buffer.split("\n\n");
     buffer = events.pop() ?? "";
 
     for (const rawEvent of events) {
-      const dataLine = rawEvent.split("\n").find((l) => l.startsWith("data:"));
-      const eventLine = rawEvent.split("\n").find((l) => l.startsWith("event:"));
-      const eventName = eventLine?.slice("event:".length).trim();
-      const data = dataLine?.slice("data:".length).trim() ?? "";
+      const lines = rawEvent.split("\n");
+      const eventName = lines
+        .find((l) => l.startsWith("event:"))
+        ?.slice("event:".length)
+        .trim();
+      // A single SSE event can carry multiple "data:" lines (embedded
+      // newlines in the value) that must be rejoined, not just the first.
+      const data = lines
+        .filter((l) => l.startsWith("data:"))
+        .map((l) => l.slice("data:".length).replace(/^ /, ""))
+        .join("\n");
       if (eventName === "token" && data) onToken(data);
       if (eventName === "error") throw new Error(data || "stream error");
     }
@@ -91,8 +100,9 @@ export default function Home() {
         <div className="flex flex-1 flex-col gap-4 overflow-y-auto pb-4">
           {messages.length === 0 && (
             <p className="text-sm text-zinc-500">
-              No tools yet — this is a plain streaming round trip to the
-              model (Week 1).
+              Ask about a pod, deployment, service, or node — the agent can
+              call read-only cluster tools to check (Week 2: single
+              tool-call round trip, not yet the full investigation loop).
             </p>
           )}
           {messages.map((m, i) => (
@@ -104,9 +114,23 @@ export default function Home() {
                   : "self-start rounded-2xl bg-zinc-200 px-4 py-2 text-black dark:bg-zinc-800 dark:text-zinc-50"
               }
             >
-              <p className="whitespace-pre-wrap text-sm">
-                {m.content || (pending && i === messages.length - 1 ? "…" : "")}
-              </p>
+              {m.content ? (
+                m.role === "assistant" ? (
+                  <div
+                    className="space-y-2 text-sm leading-relaxed
+                      [&_code]:rounded [&_code]:bg-black/10 [&_code]:px-1 [&_code]:py-0.5 [&_code]:text-[0.85em] dark:[&_code]:bg-white/10
+                      [&_ol]:list-decimal [&_ol]:pl-5 [&_ul]:list-disc [&_ul]:pl-5
+                      [&_pre]:overflow-x-auto [&_pre]:rounded-lg [&_pre]:bg-black/10 [&_pre]:p-2 [&_pre]:text-[0.85em] dark:[&_pre]:bg-white/10 [&_pre_code]:bg-transparent [&_pre_code]:p-0
+                      [&_h1]:text-base [&_h1]:font-semibold [&_h2]:text-base [&_h2]:font-semibold [&_h3]:text-sm [&_h3]:font-semibold"
+                  >
+                    <ReactMarkdown>{m.content}</ReactMarkdown>
+                  </div>
+                ) : (
+                  <p className="whitespace-pre-wrap text-sm">{m.content}</p>
+                )
+              ) : pending && i === messages.length - 1 ? (
+                <p className="text-sm">…</p>
+              ) : null}
             </div>
           ))}
         </div>
