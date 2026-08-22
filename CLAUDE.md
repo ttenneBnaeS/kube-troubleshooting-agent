@@ -19,16 +19,17 @@ locked in up front so they wouldn't get re-litigated mid-build.
 
 ## Current state vs. planned state
 
-The repo is scaffolded for the full 8-week plan; Weeks 1-2 are
+The repo is scaffolded for the full 8-week plan; Weeks 1-3 are
 implemented. `backend/tools/` has a real read-only Kubernetes tool
 catalog (pod status, describe, logs, events, node status, service
-endpoints) against the official `kubernetes` Python client, plus a
-LangChain `@tool` adapter layer, and `backend/api/main.py`'s chat
-endpoint does a single tool-call round trip — not yet the full
-LangGraph plan/execute loop. `backend/agent/`, `backend/graph/`, and
-`backend/rag/` each still contain only an `__init__.py` and a
-`README.md` stating which week fills them in — don't expect a LangGraph
-state machine or RAG retrieval to exist yet. `eval/`, `infra/`,
+endpoints) against the official `kubernetes` Python client. `backend/rag/`
+has a real RAG pipeline (curated K8s/kubectl doc corpus → Voyage AI
+embeddings → Qdrant) exposed as another tool. `backend/api/main.py`'s
+chat endpoint loops both tool sets through a bounded probe/execute cycle
+(capped at 5 rounds) — not yet the full LangGraph plan/execute graph.
+`backend/agent/` and `backend/graph/` still each contain only an
+`__init__.py` and a `README.md` stating which week fills them in — don't
+expect a LangGraph state machine to exist yet. `eval/`, `infra/`,
 `tests/`, and `demo/` are likewise empty placeholders for later weeks.
 
 ## Commands
@@ -61,6 +62,23 @@ kube-contexts itself there automatically. Override via `KUBE_NAMESPACE`
 (see `.env.example`); unset works fine against a single-context Kind
 cluster.
 
+### RAG / Qdrant (required for the docs-search tool)
+
+```bash
+docker run -d --name qdrant -p 6333:6333 -p 6334:6334 \
+  -v qdrant_storage:/qdrant/storage qdrant/qdrant
+cd backend && uv run python -m rag.index   # builds/rebuilds the collection
+```
+
+Needs `VOYAGE_API_KEY` in `backend/.env` (Anthropic has no embeddings
+API). On Voyage's free tier without a payment method on file, rate limits
+are strict (3 RPM / 10K TPM) and neither `VoyageAIEmbeddings` nor
+`QdrantVectorStore` back off for that — `rag/index.py` embeds in small,
+spaced batches itself (`_EMBED_BATCH_SIZE`/`_EMBED_DELAY_SECONDS`) to
+stay under those caps; don't replace that with a plain
+`QdrantVectorStore.from_documents(all_chunks, ...)` call or reindexing
+will fail with `RateLimitError` partway through.
+
 ### Frontend (`frontend/`, Next.js App Router + TypeScript + Tailwind)
 
 ```bash
@@ -87,20 +105,28 @@ secrets must never reach the frontend bundle, and `NEXT_PUBLIC_*` vars are
 public by construction).
 
 - **Backend → LLM**: `backend/api/main.py` builds a LangChain message
-  list, binds the tool catalog (`tools.TOOLS`) via `bind_tools`, and
-  streams tokens from `ChatAnthropic` over SSE (`sse-starlette`). Model
-  selection is never hardcoded in a node/route — it goes through
-  `models.config.get_chat_model(tier)`, which maps a `ModelTier`
-  (`REASONING` or `FAST`) to a concrete model id. This is the same
-  chokepoint later LangGraph nodes will use, so tier/provider changes stay
-  a one-place edit.
-- **Tool-call round trip is intentionally partial**: the chat endpoint
-  probes for tool calls, executes at most one round of them, appends the
-  results, then streams the final answer — not the bounded plan/execute
-  loop in `docs/architecture.md` §7, which is Week 4's job. If the model
-  wants a second tool call after seeing the first result, it won't get
-  one yet; that gap is expected until Week 4 replaces this with the real
-  LangGraph loop.
+  list, binds the combined tool set (`tools.TOOLS` + `rag.search_k8s_docs_tool`,
+  as `ALL_TOOLS`) via `bind_tools`, and streams tokens from `ChatAnthropic`
+  over SSE (`sse-starlette`). Model selection is never hardcoded in a
+  node/route — it goes through `models.config.get_chat_model(tier)`,
+  which maps a `ModelTier` (`REASONING` or `FAST`) to a concrete model id.
+  This is the same chokepoint later LangGraph nodes will use, so
+  tier/provider changes stay a one-place edit. `max_tokens` is 4096, not
+  the Week-1 default of 1024 — extended-thinking tokens count against
+  this same budget, and a low cap silently truncates a real diagnosis
+  (`stop_reason: max_tokens`, no error) rather than failing loudly.
+- **Tool loop is a bounded probe/execute cycle, not the real graph yet**:
+  the chat endpoint loops "invoke → if tool_calls, execute and append
+  results → invoke again" up to `MAX_TOOL_ROUNDS` (5), then forces a
+  final answer with an *unbound* model instance (`final_chat_model`, no
+  tools attached) so a run that hits the cap still produces visible text
+  instead of streaming nothing. This mirrors the loop-guard idea in
+  `docs/architecture.md` §3.4/§7 without being the actual LangGraph state
+  machine — that's still Week 4. Don't collapse this back down to a
+  single round trip: with two tool categories now bound (cluster ops +
+  docs search), a "diagnose, then look up the doc that confirms it" turn
+  routinely needs 2+ rounds, and a single-round version silently drops
+  the answer whenever that happens (empty SSE stream, no error event).
 - **Tool catalog** (`backend/tools/`): plain functions
   (`pods.py`/`events.py`/`logs.py`/`nodes.py`/`services.py`/`describe.py`)
   against the official `kubernetes` Python client — chosen over shelling
@@ -116,6 +142,21 @@ public by construction).
   grants (Kind's admin config, locally) — no RBAC-scoped read-only
   ServiceAccount yet, which `docs/architecture.md` §5 calls for as
   defense in depth; enforcement today is code-layer only.
+- **RAG** (`backend/rag/`): `corpus/` is ~22 curated K8s/kubectl doc pages
+  (YAML frontmatter + markdown, scoped to the failure-scenario catalog,
+  not a full site crawl) → `index.py` chunks them
+  (`RecursiveCharacterTextSplitter`, markdown-aware) and embeds via
+  Voyage AI into Qdrant → `retriever.py`'s `search_docs()` does the
+  query-time similarity search, returning normalized
+  `{title, source_url, content, score}` results, no LangChain dependency
+  — same plain-function-vs-`@tool`-adapter split as `backend/tools/`, for
+  the same reason (Week 4/5 reuse without a LangChain dependency).
+  `retriever.py` caches its `QdrantVectorStore` (`@lru_cache`) and passes
+  `validate_collection_config=False`: the default constructor otherwise
+  embeds a dummy string on every call just to check vector-size
+  compatibility, which is both wasteful and, on Voyage's throttled free
+  tier, enough by itself to trigger `RateLimitError` on repeated
+  searches.
 - **Frontend → Backend**: `frontend/src/app/page.tsx` calls `POST
   /api/chat` and hand-parses the SSE response itself (`event: token` /
   `event: error` / `event: done`) rather than using `EventSource`, because
@@ -127,7 +168,7 @@ public by construction).
   content instead of erroring. Assistant messages render through
   `react-markdown`; user messages stay plain text.
 - **Prompts** are versioned files under `backend/prompts/` (e.g.
-  `chat_v2.md`), loaded by name via `prompts.load_prompt()` — add a new
+  `chat_v3.md`), loaded by name via `prompts.load_prompt()` — add a new
   version file rather than editing one in place when a prompt changes
   behavior you want to compare against.
 - **Safety boundary** (binding for all future tool work, not just a
@@ -137,6 +178,9 @@ public by construction).
   suggested as text, never executed by the agent.
 - **LangChain vs. LangGraph**: LangGraph (arriving Week 4) owns
   orchestration — the state graph, plan/execute loop, checkpointing.
-  LangChain is used for RAG plumbing (Week 3) and the model wrapper
+  LangChain is used for RAG plumbing (`langchain-qdrant`,
+  `langchain-text-splitters`, `langchain-voyageai`) and the model wrapper
   (`ChatAnthropic`) only; the agent loop itself is not wrapped in a
-  LangChain chain.
+  LangChain chain — the bounded tool loop in `main.py` calls
+  `chat_model`/tools directly, the same shape Week 4's LangGraph nodes
+  will take.
