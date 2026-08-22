@@ -22,7 +22,10 @@ class Settings(BaseSettings):
     anthropic_api_key: str = ""
     reasoning_model: str = "claude-sonnet-5"
     fast_model: str = "claude-haiku-4-5-20251001"
-    max_tokens: int = 1024
+    # 1024 was enough for Week 1's plain chat; multi-tool diagnoses that
+    # cite evidence and cite docs run longer, and extended thinking tokens
+    # also count against this budget, so headroom needs to be generous.
+    max_tokens: int = 4096
 
     def model_for(self, tier: ModelTier) -> str:
         return self.reasoning_model if tier is ModelTier.REASONING else self.fast_model

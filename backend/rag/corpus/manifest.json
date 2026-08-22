@@ -1,0 +1,112 @@
+[
+  {
+    "file": "pod-lifecycle.md",
+    "title": "Pod Lifecycle",
+    "source_url": "https://kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle/"
+  },
+  {
+    "file": "debug-pods.md",
+    "title": "Debug Pods",
+    "source_url": "https://kubernetes.io/docs/tasks/debug/debug-application/debug-pods/"
+  },
+  {
+    "file": "debug-running-pods.md",
+    "title": "Debug Running Pods",
+    "source_url": "https://kubernetes.io/docs/tasks/debug/debug-application/debug-running-pod/"
+  },
+  {
+    "file": "probes.md",
+    "title": "Configure Liveness, Readiness and Startup Probes",
+    "source_url": "https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/"
+  },
+  {
+    "file": "assign-memory-resources.md",
+    "title": "Assign Memory Resources to Containers and Pods",
+    "source_url": "https://kubernetes.io/docs/tasks/configure-pod-container/assign-memory-resource/"
+  },
+  {
+    "file": "manage-resources-containers.md",
+    "title": "Resource Management for Pods and Containers",
+    "source_url": "https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/"
+  },
+  {
+    "file": "node-pressure-eviction.md",
+    "title": "Node-pressure Eviction",
+    "source_url": "https://kubernetes.io/docs/concepts/scheduling-eviction/node-pressure-eviction/"
+  },
+  {
+    "file": "images.md",
+    "title": "Images",
+    "source_url": "https://kubernetes.io/docs/concepts/containers/images/"
+  },
+  {
+    "file": "pull-image-private-registry.md",
+    "title": "Pull an Image from a Private Registry",
+    "source_url": "https://kubernetes.io/docs/tasks/configure-pod-container/pull-image-private-registry/"
+  },
+  {
+    "file": "dns-pod-service.md",
+    "title": "DNS for Services and Pods",
+    "source_url": "https://kubernetes.io/docs/concepts/services-networking/dns-pod-service/"
+  },
+  {
+    "file": "dns-debugging-resolution.md",
+    "title": "Debugging DNS Resolution",
+    "source_url": "https://kubernetes.io/docs/tasks/administer-cluster/dns-debugging-resolution/"
+  },
+  {
+    "file": "secrets.md",
+    "title": "Secrets",
+    "source_url": "https://kubernetes.io/docs/concepts/configuration/secret/"
+  },
+  {
+    "file": "configmap.md",
+    "title": "ConfigMaps",
+    "source_url": "https://kubernetes.io/docs/concepts/configuration/configmap/"
+  },
+  {
+    "file": "configure-pod-configmap.md",
+    "title": "Configure a Pod to Use a ConfigMap",
+    "source_url": "https://kubernetes.io/docs/tasks/configure-pod-container/configure-pod-configmap/"
+  },
+  {
+    "file": "distribute-credentials-secure.md",
+    "title": "Distribute Credentials Securely Using Secrets",
+    "source_url": "https://kubernetes.io/docs/tasks/inject-data-application/distribute-credentials-secure/"
+  },
+  {
+    "file": "network-policies.md",
+    "title": "Network Policies",
+    "source_url": "https://kubernetes.io/docs/concepts/services-networking/network-policies/"
+  },
+  {
+    "file": "service.md",
+    "title": "Service",
+    "source_url": "https://kubernetes.io/docs/concepts/services-networking/service/"
+  },
+  {
+    "file": "debug-service.md",
+    "title": "Debug Services",
+    "source_url": "https://kubernetes.io/docs/tasks/debug/debug-application/debug-service/"
+  },
+  {
+    "file": "kubectl-cheatsheet.md",
+    "title": "kubectl Cheat Sheet",
+    "source_url": "https://kubernetes.io/docs/reference/kubectl/cheatsheet/"
+  },
+  {
+    "file": "node-status-conditions.md",
+    "title": "Node Status and Conditions",
+    "source_url": "https://kubernetes.io/docs/concepts/architecture/nodes/"
+  },
+  {
+    "file": "debug-cluster.md",
+    "title": "Troubleshooting Clusters",
+    "source_url": "https://kubernetes.io/docs/tasks/debug/debug-cluster/"
+  },
+  {
+    "file": "deployment.md",
+    "title": "Deployments",
+    "source_url": "https://kubernetes.io/docs/concepts/workloads/controllers/deployment/"
+  }
+]

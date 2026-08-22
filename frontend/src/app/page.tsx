@@ -101,8 +101,9 @@ export default function Home() {
           {messages.length === 0 && (
             <p className="text-sm text-zinc-500">
               Ask about a pod, deployment, service, or node — the agent can
-              call read-only cluster tools to check (Week 2: single
-              tool-call round trip, not yet the full investigation loop).
+              call read-only cluster tools and search official K8s docs to
+              ground its answer (Week 3: bounded multi-round tool loop,
+              not yet the full LangGraph investigation loop).
             </p>
           )}
           {messages.map((m, i) => (
@@ -110,14 +111,14 @@ export default function Home() {
               key={i}
               className={
                 m.role === "user"
-                  ? "self-end rounded-2xl bg-black px-4 py-2 text-white dark:bg-zinc-50 dark:text-black"
-                  : "self-start rounded-2xl bg-zinc-200 px-4 py-2 text-black dark:bg-zinc-800 dark:text-zinc-50"
+                  ? "min-w-0 max-w-[90%] self-end rounded-2xl bg-black px-4 py-2 text-white dark:bg-zinc-50 dark:text-black"
+                  : "min-w-0 max-w-[90%] self-start rounded-2xl bg-zinc-200 px-4 py-2 text-black dark:bg-zinc-800 dark:text-zinc-50"
               }
             >
               {m.content ? (
                 m.role === "assistant" ? (
                   <div
-                    className="space-y-2 text-sm leading-relaxed
+                    className="space-y-2 break-words text-sm leading-relaxed
                       [&_code]:rounded [&_code]:bg-black/10 [&_code]:px-1 [&_code]:py-0.5 [&_code]:text-[0.85em] dark:[&_code]:bg-white/10
                       [&_ol]:list-decimal [&_ol]:pl-5 [&_ul]:list-disc [&_ul]:pl-5
                       [&_pre]:overflow-x-auto [&_pre]:rounded-lg [&_pre]:bg-black/10 [&_pre]:p-2 [&_pre]:text-[0.85em] dark:[&_pre]:bg-white/10 [&_pre_code]:bg-transparent [&_pre_code]:p-0
@@ -126,7 +127,7 @@ export default function Home() {
                     <ReactMarkdown>{m.content}</ReactMarkdown>
                   </div>
                 ) : (
-                  <p className="whitespace-pre-wrap text-sm">{m.content}</p>
+                  <p className="whitespace-pre-wrap break-words text-sm">{m.content}</p>
                 )
               ) : pending && i === messages.length - 1 ? (
                 <p className="text-sm">…</p>
