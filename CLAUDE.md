@@ -53,7 +53,17 @@ target is Kind:
 
 ```bash
 kind create cluster --name kube-troubleshoot
+kubectl apply -f infra/kubernetes/   # demo failure scenarios, see below
 ```
+
+`infra/kubernetes/` holds the demo scenario manifests (also the plan's
+designated home for eval scenario manifests, Week 5): `crashloop-demo.yaml`
+(CrashLoopBackOff), `imagepull-demo.yaml` (ImagePullBackOff), and
+`web-demo.yaml` (healthy nginx Deployment+Service, for exercising
+`get_service_endpoints` against something that works). These match
+exactly what's live on the `kube-troubleshoot` cluster today (`kubectl
+diff -f infra/kubernetes/` is clean) — if you change one, either apply it
+for real or keep it in sync with what the live demo pods look like.
 
 `backend/tools/client.py` tries in-cluster config first, then falls back
 to the ambient kubeconfig (`~/.kube/config`) — Kind writes and
