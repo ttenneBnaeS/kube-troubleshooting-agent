@@ -1,0 +1,13 @@
+# Failure mode: CrashLoopBackOff — container starts, prints "booting", exits
+# with code 1, and keeps getting restarted.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: crashloop-demo
+  labels:
+    app: crashloop-demo
+spec:
+  containers:
+    - name: main
+      image: busybox
+      command: ["sh", "-c", "echo booting; sleep 2; exit 1"]

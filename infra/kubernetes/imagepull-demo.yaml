@@ -1,0 +1,11 @@
+# Failure mode: ImagePullBackOff — image reference doesn't exist.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: imagepull-demo
+  labels:
+    app: imagepull-demo
+spec:
+  containers:
+    - name: main
+      image: does-not-exist/definitely-not-a-real-image:v1

@@ -29,10 +29,19 @@ answer when a second tool call is needed.
 Beyond the backend/frontend env files below, the tool-calling and RAG
 paths need:
 
-- **A reachable Kubernetes cluster** — local dev target is
-  [Kind](https://kind.sigs.k8s.io/): `kind create cluster --name
-  kube-troubleshoot`. Without one, `/api/health` and tool-free chat still
-  work, but cluster questions will error.
+- **A reachable Kubernetes cluster with something broken to diagnose** —
+  local dev target is [Kind](https://kind.sigs.k8s.io/):
+  ```bash
+  kind create cluster --name kube-troubleshoot
+  kubectl apply -f infra/kubernetes/
+  ```
+  The second command applies three demo scenarios so there's actually
+  something to ask the agent about: `crashloop-demo` (a pod that exits
+  right after starting → `CrashLoopBackOff`), `imagepull-demo` (a bogus
+  image reference → `ImagePullBackOff`), and `web` (a healthy nginx
+  Deployment/Service pair, for exercising `get_service_endpoints` against
+  something that *isn't* broken). Without a cluster at all, `/api/health`
+  and tool-free chat still work, but cluster questions will error.
 - **Qdrant**, for the docs-search tool:
   ```bash
   docker run -d --name qdrant -p 6333:6333 -p 6334:6334 \
