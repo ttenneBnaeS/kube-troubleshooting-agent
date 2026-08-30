@@ -1,15 +1,10 @@
-import asyncio
-
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from sse_starlette.sse import EventSourceResponse
 
 from api.schemas import ChatRequest
-from models.config import ModelTier, get_chat_model
-from prompts import load_prompt
-from rag import search_k8s_docs_tool
-from tools import TOOLS
+from graph import troubleshooting_graph
 
 app = FastAPI(title="Kubernetes Troubleshooting Agent")
 
@@ -20,50 +15,53 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-ALL_TOOLS = [*TOOLS, search_k8s_docs_tool]
-chat_model = get_chat_model(ModelTier.REASONING).bind_tools(ALL_TOOLS)
-# No tools bound: used only for the closing streamed answer, so a model
-# that still wants another tool call at the round cap is forced to answer
-# in text from whatever evidence it already has, instead of streaming
-# nothing (see the loop guard in docs/architecture.md §3.4/§7).
-final_chat_model = get_chat_model(ModelTier.REASONING)
-TOOLS_BY_NAME = {t.name: t for t in ALL_TOOLS}
-MAX_TOOL_ROUNDS = 5
-
 
 @app.get("/api/health")
 async def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
+def _field(state, name, default=None):
+    # `values`-mode state chunks come back as either the AgentState model
+    # or a plain dict of its fields depending on LangGraph version/path —
+    # accept either rather than assuming one.
+    if isinstance(state, dict):
+        return state.get(name, default)
+    return getattr(state, name, default)
+
+
 @app.post("/api/chat")
 async def chat(req: ChatRequest) -> EventSourceResponse:
-    messages: list[BaseMessage] = [SystemMessage(content=load_prompt("chat_v3"))]
-    for m in req.history:
-        role_cls = HumanMessage if m.role == "user" else AIMessage
-        messages.append(role_cls(content=m.content))
-    messages.append(HumanMessage(content=req.message))
+    history: list[BaseMessage] = [
+        (HumanMessage if m.role == "user" else AIMessage)(content=m.content) for m in req.history
+    ]
+    initial_state = {"user_request": req.message, "messages": history}
 
     async def event_stream():
         try:
-            # Bounded plan/execute-style loop (the Week 4 LangGraph loop
-            # replaces this with the real graph, but the loop-guard idea is
-            # the same as docs/architecture.md §3.4/§7): let the model call
-            # tools across multiple rounds, capped so a run can't loop
-            # forever, then force a final text answer from whatever
-            # evidence it gathered.
-            for _ in range(MAX_TOOL_ROUNDS):
-                probe = await chat_model.ainvoke(messages)
-                if not probe.tool_calls:
-                    break
-                messages.append(probe)
-                for call in probe.tool_calls:
-                    result = await asyncio.to_thread(TOOLS_BY_NAME[call["name"]].invoke, call["args"])
-                    messages.append(ToolMessage(content=result, tool_call_id=call["id"]))
+            final_state = None
+            streamed_recommendation = False
+            # The graph's `recommend` node is the only one whose LLM call
+            # produces user-facing prose; "messages" mode surfaces its
+            # tokens as they're generated, "values" mode gives us the full
+            # state after each node so we can fall back to a clarifying
+            # question if `intake` short-circuited the graph before
+            # `recommend` ever ran (docs/architecture.md §7).
+            async for stream_mode, chunk in troubleshooting_graph.astream(
+                initial_state, stream_mode=["messages", "values"]
+            ):
+                if stream_mode == "messages":
+                    message, metadata = chunk
+                    if metadata.get("langgraph_node") == "recommend" and message.content:
+                        streamed_recommendation = True
+                        yield {"event": "token", "data": message.content}
+                elif stream_mode == "values":
+                    final_state = chunk
 
-            async for chunk in final_chat_model.astream(messages):
-                if chunk.text:
-                    yield {"event": "token", "data": chunk.text}
+            if not streamed_recommendation:
+                scope = _field(final_state, "scope")
+                question = _field(scope, "clarifying_question") if scope else None
+                yield {"event": "token", "data": question or "Could you say more about what's going wrong?"}
         except Exception as exc:
             yield {"event": "error", "data": str(exc)}
             return

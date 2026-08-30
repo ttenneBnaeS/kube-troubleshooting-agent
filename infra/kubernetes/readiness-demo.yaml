@@ -1,0 +1,46 @@
+# Failure mode: misconfigured readiness probe — the container starts and
+# runs fine (no restarts, phase Running), but its readinessProbe hits a
+# path nginx 404s on, so it never passes and the pod never becomes Ready.
+# get_pod_status alone just shows ready=false on an otherwise-healthy-
+# looking container; confirming *why* needs get_recent_events (the
+# "Unhealthy: Readiness probe failed" warning) and get_service_endpoints
+# (confirming the Service has no ready address for it, so it's not just
+# unready but actually out of rotation).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: readiness-demo
+  labels:
+    app: readiness-demo
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: readiness-demo
+  template:
+    metadata:
+      labels:
+        app: readiness-demo
+    spec:
+      containers:
+        - name: nginx
+          image: nginx
+          ports:
+            - containerPort: 80
+          readinessProbe:
+            httpGet:
+              path: /this-path-does-not-exist
+              port: 80
+            periodSeconds: 5
+            failureThreshold: 1
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: readiness-demo
+spec:
+  selector:
+    app: readiness-demo
+  ports:
+    - port: 80
+      targetPort: 80

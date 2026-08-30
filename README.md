@@ -35,13 +35,21 @@ paths need:
   kind create cluster --name kube-troubleshoot
   kubectl apply -f infra/kubernetes/
   ```
-  The second command applies three demo scenarios so there's actually
+  The second command applies five demo scenarios so there's actually
   something to ask the agent about: `crashloop-demo` (a pod that exits
   right after starting → `CrashLoopBackOff`), `imagepull-demo` (a bogus
-  image reference → `ImagePullBackOff`), and `web` (a healthy nginx
-  Deployment/Service pair, for exercising `get_service_endpoints` against
-  something that *isn't* broken). Without a cluster at all, `/api/health`
-  and tool-free chat still work, but cluster questions will error.
+  image reference → `ImagePullBackOff`), `oomkilled-demo` (a container
+  whose workload blows well past its 50Mi memory limit → repeated
+  `OOMKilled`), `readiness-demo` (a Deployment+Service whose readiness
+  probe hits a 404 path, so the pod runs fine but never joins the
+  Service), and `web` (a healthy nginx Deployment/Service pair, for
+  exercising `get_service_endpoints` against something that *isn't*
+  broken). The first two resolve from pod status in one extra tool call;
+  the OOMKilled and readiness scenarios are deliberately built so the
+  agent needs 2-3 tool calls beyond the initial sweep to actually confirm
+  the root cause, a better demo of the `plan`/`execute_tool` loop. Without
+  a cluster at all, `/api/health` and tool-free chat still work, but
+  cluster questions will error.
 - **Qdrant**, for the docs-search tool:
   ```bash
   docker run -d --name qdrant -p 6333:6333 -p 6334:6334 \

@@ -1,0 +1,25 @@
+# Failure mode: OOMKilled — the container's memory limit (50Mi) is far
+# below what its workload (stress, allocating 150M) needs, so the kernel
+# OOM-killer kills it repeatedly. Unlike crashloop/imagepull-demo, the
+# reason isn't visible from pod status alone: get_pod_status shows
+# terminated/OOMKilled and a restart count, but confirming it's a
+# container-limit problem rather than node memory pressure needs
+# get_recent_events (the OOMKilling event) and get_node_status (ruling out
+# node-level MemoryPressure) too.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: oomkilled-demo
+  labels:
+    app: oomkilled-demo
+spec:
+  containers:
+    - name: main
+      image: polinux/stress
+      resources:
+        limits:
+          memory: "50Mi"
+        requests:
+          memory: "50Mi"
+      command: ["stress"]
+      args: ["--vm", "1", "--vm-bytes", "150M", "--vm-hang", "1"]
