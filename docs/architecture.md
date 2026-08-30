@@ -155,8 +155,11 @@ demo/
 
 ## 11. Status
 
-As of Week 1: this document, the FastAPI streaming skeleton, and a minimal
-Next.js chat UI doing a single non-tool-calling LLM round trip exist. The
-LangGraph state machine described above is implemented starting Week 4;
-until then `backend/agent`, `backend/graph`, `backend/tools`, and
-`backend/rag` are placeholders.
+As of Week 4: the FastAPI streaming skeleton, the Next.js chat UI, the
+read-only tool catalog (§4), the RAG pipeline (§8), and the LangGraph
+state machine (§6-7) all exist and are wired together — `backend/agent/`
+and `backend/graph/` are no longer placeholders. Not yet built: the eval
+harness (§9, Week 5), checkpointed conversational memory (§7's
+"Checkpointing & memory" — Week 6; today's multi-turn context is the
+client resending full history into `AgentState.messages`), and the MCP
+server (Week 8).
