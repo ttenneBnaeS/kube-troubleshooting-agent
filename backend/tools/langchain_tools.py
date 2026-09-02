@@ -16,19 +16,20 @@ from .events import get_recent_events
 from .logs import get_container_logs
 from .nodes import get_node_status
 from .pods import get_pod_status
+from .policies import get_network_policies
 from .services import get_service_endpoints
 
 
 @tool
 def get_pod_status_tool(namespace: str | None = None, pod_name: str | None = None) -> str:
-    """Get status of pods in a namespace, or one pod by name: phase, container states (running/waiting/terminated + reason like CrashLoopBackOff/OOMKilled/ImagePullBackOff), restart counts, readiness, age."""
+    """Get status of pods in a namespace, or one pod by name: phase, labels, container states (running/waiting/terminated + reason like CrashLoopBackOff/OOMKilled/ImagePullBackOff), restart counts, readiness, age. `init_containers` is reported separately from `containers`: init containers run to completion before app containers start, so a pod blocked in init shows phase=Pending with its app containers waiting on `PodInitializing` — that reason only means "stuck behind init", so always check `init_containers` for the actual failure rather than reporting PodInitializing as the cause. `labels` are what a Service selector must match, so compare them against a selector when a Service has no endpoints."""
     results = get_pod_status(namespace=namespace, pod_name=pod_name)
     return json.dumps([r.model_dump() for r in results])
 
 
 @tool
 def describe_resource_tool(kind: DescribableKind, name: str, namespace: str | None = None) -> str:
-    """Describe a Kubernetes resource: structured status/conditions plus its recent related events. `kind` must be one of: pod, deployment, service, node."""
+    """Describe a Kubernetes resource: structured status/conditions plus its recent related events. `kind` must be one of: pod, deployment, service, node, configmap, secret. For configmap/secret this returns the key names present (and their value sizes) but never the values themselves — use it to check whether a key a pod references actually exists."""
     result = describe_resource(kind=kind, name=name, namespace=namespace)
     return json.dumps(result.model_dump())
 
@@ -72,9 +73,16 @@ def get_node_status_tool(node_name: str | None = None) -> str:
 
 @tool
 def get_service_endpoints_tool(service_name: str, namespace: str | None = None) -> str:
-    """Get a Service's selector/ports and its Endpoints readiness: which backing pod IPs are currently ready to receive traffic vs not ready."""
+    """Get a Service's selector/ports and its Endpoints readiness: which backing pod IPs are currently ready to receive traffic vs not ready. If both address lists are empty the selector matches no pods at all — compare `selector` against the `labels` returned by get_pod_status_tool to find the mismatch."""
     result = get_service_endpoints(service_name=service_name, namespace=namespace)
     return json.dumps(result.model_dump())
+
+
+@tool
+def get_network_policies_tool(namespace: str | None = None, policy_name: str | None = None) -> str:
+    """Get NetworkPolicies in a namespace, or one by name: which pods each policy selects, its policy types (Ingress/Egress), and the allowed peers and ports per rule. Use this when pods are Running and Ready and a Service has ready endpoints but traffic still fails — a policy dropping packets produces no events and no error logs on the receiving side, so it is invisible to every other tool."""
+    results = get_network_policies(namespace=namespace, policy_name=policy_name)
+    return json.dumps([r.model_dump() for r in results])
 
 
 TOOLS = [
@@ -84,4 +92,5 @@ TOOLS = [
     get_recent_events_tool,
     get_node_status_tool,
     get_service_endpoints_tool,
+    get_network_policies_tool,
 ]

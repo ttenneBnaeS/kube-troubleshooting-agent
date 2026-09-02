@@ -5,7 +5,7 @@ from .config import settings
 from .events import get_recent_events
 from .models import DescribeResult
 
-DescribableKind = Literal["pod", "deployment", "service", "node"]
+DescribableKind = Literal["pod", "deployment", "service", "node", "configmap", "secret"]
 
 
 def describe_resource(
@@ -17,7 +17,8 @@ def describe_resource(
 
     Unlike `kubectl describe`, there's no text to parse — this composes the
     object's own status fields with a filtered event lookup. Supports pod,
-    deployment, service, and node; other kinds can be added the same way.
+    deployment, service, node, configmap, and secret; other kinds can be
+    added the same way.
     """
     ns = namespace or settings.namespace
     summary = _SUMMARIZERS[kind](name, ns)
@@ -36,20 +37,26 @@ def _summarize_pod(name: str, namespace: str) -> dict:
     pod = get_core_v1_api().read_namespaced_pod(name=name, namespace=namespace)
     return {
         "phase": pod.status.phase,
+        "labels": dict(pod.metadata.labels or {}),
         "conditions": [
             {"type": c.type, "status": c.status, "reason": c.reason, "message": c.message}
             for c in (pod.status.conditions or [])
         ],
-        "container_statuses": [
-            {
-                "name": cs.name,
-                "ready": cs.ready,
-                "restart_count": cs.restart_count,
-                "state": _container_state_summary(cs),
-            }
-            for cs in (pod.status.container_statuses or [])
-        ],
+        # Init statuses are a separate list on the API object; omitting
+        # them here would leave describe as blind to an init failure as
+        # get_pod_status was.
+        "init_container_statuses": [_status_summary(cs) for cs in (pod.status.init_container_statuses or [])],
+        "container_statuses": [_status_summary(cs) for cs in (pod.status.container_statuses or [])],
         "node_name": pod.spec.node_name,
+    }
+
+
+def _status_summary(cs) -> dict:
+    return {
+        "name": cs.name,
+        "ready": cs.ready,
+        "restart_count": cs.restart_count,
+        "state": _container_state_summary(cs),
     }
 
 
@@ -111,9 +118,39 @@ def _summarize_node(name: str, _namespace: str) -> dict:
     }
 
 
+def _summarize_configmap(name: str, namespace: str) -> dict:
+    cm = get_core_v1_api().read_namespaced_config_map(name=name, namespace=namespace)
+    data = cm.data or {}
+    return {
+        # Keys, not values: the failure mode this exists for is a pod
+        # referencing a key that isn't there (a typo or a case mismatch),
+        # which the key list answers directly. Whole config bodies would
+        # be unbounded token cost for no diagnostic gain.
+        "keys": sorted(data),
+        "binary_keys": sorted(cm.binary_data or {}),
+        "value_sizes_bytes": {k: len(v) for k, v in sorted(data.items())},
+    }
+
+
+def _summarize_secret(name: str, namespace: str) -> dict:
+    secret = get_core_v1_api().read_namespaced_secret(name=name, namespace=namespace)
+    data = secret.data or {}
+    return {
+        # Key names and sizes only — never the values, not even
+        # base64-encoded. A read-only boundary that still hands secret
+        # material to an LLM isn't a boundary; "which keys exist" is all
+        # a missing-key diagnosis needs.
+        "type": secret.type,
+        "keys": sorted(data),
+        "value_sizes_bytes": {k: len(v) for k, v in sorted(data.items())},
+    }
+
+
 _SUMMARIZERS = {
     "pod": _summarize_pod,
     "deployment": _summarize_deployment,
     "service": _summarize_service,
     "node": _summarize_node,
+    "configmap": _summarize_configmap,
+    "secret": _summarize_secret,
 }

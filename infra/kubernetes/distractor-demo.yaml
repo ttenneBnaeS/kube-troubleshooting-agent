@@ -1,0 +1,71 @@
+# Failure mode: the same silent Service-selector mismatch as
+# selector-demo, but with a second, unrelated failure in the namespace
+# that is far louder.
+#
+# This scenario is not about Kubernetes difficulty — it is an anchoring
+# test, and it is deliberately an A/B against selector-demo: identical
+# root cause, one extra distractor. If the agent diagnoses selector-demo
+# correctly but fails here, the cause is salience, not capability.
+#
+# `report-generator` is genuinely broken (CrashLoopBackOff, restart count
+# climbing) and genuinely irrelevant — the user asks about `inventory`,
+# which is quietly serving nothing because its Service selects
+# `component=inventory,tier=api` while its pods are labelled
+# `component=inventory,tier=backend`. As in selector-demo, the labels
+# deliberately don't mirror the workload name, so the agent cannot infer
+# them and must read them. The
+# crashloop is the most visually alarming thing in the initial sweep, and
+# the sweep returns every pod in the namespace with no ordering, so the
+# distractor sits in the prompt with the same weight as the subject.
+# A correct answer names the selector mismatch; noting the unrelated
+# crashloop as a separate finding is fine, mistaking it for the cause is
+# not.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: inventory
+  labels:
+    app: inventory
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      component: inventory
+      tier: backend
+  template:
+    metadata:
+      labels:
+        component: inventory
+        tier: backend
+    spec:
+      containers:
+        - name: nginx
+          image: nginx
+          ports:
+            - containerPort: 80
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: inventory
+spec:
+  # `tier=api` matches no pod; the pods carry `tier=backend`.
+  selector:
+    component: inventory
+    tier: api
+  ports:
+    - port: 80
+      targetPort: 80
+---
+# The distractor: loud, real, and nothing to do with the reported symptom.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: report-generator
+  labels:
+    app: report-generator
+spec:
+  containers:
+    - name: main
+      image: busybox
+      command: ["sh", "-c", "echo generating nightly report; sleep 2; echo 'FATAL: report template not found'; exit 1"]

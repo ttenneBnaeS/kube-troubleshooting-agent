@@ -1,0 +1,42 @@
+# Failure mode: the cause lives in a different namespace than the one the
+# user is asking about. The `fulfillment` client calls
+# `stock-api.warehouse-demo.svc.cluster.local`, and a NetworkPolicy in the
+# `warehouse-demo` namespace (see crossns-backend-demo.yaml) admits ingress
+# only from namespaces labelled `access=warehouse`. The calling namespace
+# isn't labelled, so its packets are dropped.
+#
+# This is the scenario built to probe a specific architectural limit
+# rather than a Kubernetes one: `gather_context` sweeps only
+# `scope.namespace`, and every tool defaults to it, so the initial sweep
+# comes back completely clean — one pod, Running, zero restarts, no
+# Warning events. There is no `list_namespaces` tool, so the agent cannot
+# enumerate where else to look. The single breadcrumb is the
+# fully-qualified hostname in the client's logs, which names the namespace
+# to investigate; the agent has to notice it and then pass that namespace
+# explicitly to a tool.
+#
+# Known limit, deliberately accepted: there is no tool that reads
+# namespace labels, so the agent can identify the policy as the cause and
+# see that it requires `access=warehouse` on the source namespace, but
+# cannot directly confirm the calling namespace lacks that label. That
+# inference is enough for a correct diagnosis and the golden label is
+# written to accept it.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: fulfillment
+  labels:
+    app: fulfillment
+spec:
+  containers:
+    - name: client
+      image: busybox
+      command: ["sh", "-c"]
+      args:
+        - |
+          while true; do
+            echo "[fulfillment] GET http://stock-api.warehouse-demo.svc.cluster.local/stock"
+            wget -q -T 5 -O- http://stock-api.warehouse-demo.svc.cluster.local/stock
+            echo "[fulfillment] request failed with exit code $?, retrying in 10s"
+            sleep 10
+          done

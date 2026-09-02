@@ -2,10 +2,18 @@
 # runs fine (no restarts, phase Running), but its readinessProbe hits a
 # path nginx 404s on, so it never passes and the pod never becomes Ready.
 # get_pod_status alone just shows ready=false on an otherwise-healthy-
-# looking container; confirming *why* needs get_recent_events (the
-# "Unhealthy: Readiness probe failed" warning) and get_service_endpoints
-# (confirming the Service has no ready address for it, so it's not just
+# looking container; the *why* comes from the "Unhealthy: Readiness probe
+# failed ... statuscode: 404" warning event, with get_service_endpoints
+# confirming the Service has no ready address for it (so it's not just
 # unready but actually out of rotation).
+#
+# Measured, not assumed: this was written expecting a multi-hop
+# investigation, but the eval harness shows the agent resolves it in zero
+# planner tool calls — the graph's initial sweep already returns every
+# event in the namespace, so the probe-failure message is in front of the
+# model before planning starts. Kept as an eval case for exactly that
+# reason: it's the scenario that measures how much the deterministic
+# sweep is doing on its own.
 apiVersion: apps/v1
 kind: Deployment
 metadata:

@@ -1,0 +1,55 @@
+# Aux half of the cross-namespace scenario — applied into the `warehouse-demo`
+# namespace, NOT the one the user asks about. See crossns-demo.yaml for the
+# client and the full explanation.
+#
+# The backend itself is entirely healthy. The NetworkPolicy is what breaks
+# the caller: it admits ingress only from pods in namespaces carrying the
+# label `access=warehouse`, and the calling namespace doesn't have it.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: stock-api
+  labels:
+    app: stock-api
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: stock-api
+  template:
+    metadata:
+      labels:
+        app: stock-api
+    spec:
+      containers:
+        - name: nginx
+          image: nginx
+          ports:
+            - containerPort: 80
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: stock-api
+spec:
+  selector:
+    app: stock-api
+  ports:
+    - port: 80
+      targetPort: 80
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: stock-api-internal-only
+spec:
+  podSelector:
+    matchLabels:
+      app: stock-api
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              access: warehouse

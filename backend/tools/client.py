@@ -31,3 +31,9 @@ def get_core_v1_api() -> client.CoreV1Api:
 def get_apps_v1_api() -> client.AppsV1Api:
     _ensure_config_loaded()
     return client.AppsV1Api()
+
+
+@lru_cache(maxsize=1)
+def get_networking_v1_api() -> client.NetworkingV1Api:
+    _ensure_config_loaded()
+    return client.NetworkingV1Api()

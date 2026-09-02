@@ -1,0 +1,101 @@
+# Failure mode: one application-level failure hidden in a namespace full
+# of healthy, similar-looking pods. Four queue consumers are Running and
+# Ready with zero restarts; only `queue-consumer-d` is actually failing,
+# and only in its logs — it rejects every message on a schema version it
+# doesn't understand. Eight replicas of `web-noise` exist purely to make
+# the namespace crowded.
+#
+# This one probes the architecture rather than Kubernetes. Three things at
+# once, all in the same family (breadth the sweep+loop must handle):
+#
+#  1. No Kubernetes-visible signal at all. Every pod is healthy by every
+#     status field, and no Warning event is emitted, so the initial sweep
+#     — which is what resolves several other scenarios outright — returns
+#     nothing useful here beyond a list of names.
+#  2. Prompt bloat. `_investigation_summary` re-serializes the full
+#     context snapshot plus every prior tool result into a fresh message
+#     on every planning round, so a 13-pod namespace plus inlined logs
+#     (tail_lines defaults to 100) grows the prompt on each iteration and
+#     buries the one salient line.
+#  3. Search cost. The consumers are deliberately near-identical in name
+#     and spec, so there is no shortcut to guessing which one is broken —
+#     the agent has to read logs, one tool call per planning round, and
+#     `queue-consumer-d` is last in the obvious ordering.
+#
+# Because it probes three things together, a failure here needs the run
+# record read to attribute — that's an accepted tradeoff for covering a
+# failure mode nothing else in the suite reaches.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web-noise
+  labels:
+    app: web-noise
+spec:
+  replicas: 8
+  selector:
+    matchLabels:
+      app: web-noise
+  template:
+    metadata:
+      labels:
+        app: web-noise
+    spec:
+      containers:
+        - name: nginx
+          image: nginx
+          ports:
+            - containerPort: 80
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: queue-consumer-a
+  labels: { app: queue-consumer }
+spec:
+  containers:
+    - name: consumer
+      image: busybox
+      command: ["sh", "-c", "while true; do echo '[consumer-a] processed batch of 32 messages OK'; sleep 15; done"]
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: queue-consumer-b
+  labels: { app: queue-consumer }
+spec:
+  containers:
+    - name: consumer
+      image: busybox
+      command: ["sh", "-c", "while true; do echo '[consumer-b] processed batch of 28 messages OK'; sleep 15; done"]
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: queue-consumer-c
+  labels: { app: queue-consumer }
+spec:
+  containers:
+    - name: consumer
+      image: busybox
+      command: ["sh", "-c", "while true; do echo '[consumer-c] processed batch of 31 messages OK'; sleep 15; done"]
+---
+# The only genuinely broken thing in the namespace. Still Running, still
+# Ready, zero restarts — the failure is entirely inside the application.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: queue-consumer-d
+  labels: { app: queue-consumer }
+spec:
+  containers:
+    - name: consumer
+      image: busybox
+      command: ["sh", "-c"]
+      args:
+        - |
+          while true; do
+            echo "[consumer-d] ERROR: cannot decode message: unsupported schema version 3 (this consumer supports version 2)"
+            echo "[consumer-d] dropping batch, 0 messages processed"
+            sleep 15
+          done

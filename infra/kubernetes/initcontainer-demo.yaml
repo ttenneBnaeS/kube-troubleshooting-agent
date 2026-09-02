@@ -1,0 +1,36 @@
+# Failure mode: the pod's init container fails, so the app container never
+# starts. The init container runs a schema migration that can't reach its
+# database and exits 1; the kubelet restarts it, and the pod never leaves
+# Init.
+#
+# What makes this worth a scenario: the app container reports
+# `waiting / PodInitializing`, which says the pod is blocked behind init
+# but names neither the failing init container nor why. Init container
+# statuses live in a separate list on the API object
+# (`status.initContainerStatuses`), and code that reads only
+# `status.containerStatuses` — as this project's tool layer originally
+# did — leaves the failure undiagnosable: the agent sees PodInitializing
+# and has nothing to attribute it to. A correct diagnosis names the init
+# container, not PodInitializing.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: migrate-demo
+  labels:
+    app: migrate-demo
+spec:
+  initContainers:
+    - name: db-migrate
+      image: busybox
+      command: ["sh", "-c"]
+      args:
+        - |
+          echo "running schema migration against db:5432"
+          sleep 2
+          echo "ERROR: could not connect to database host 'db' port 5432: host unreachable"
+          exit 1
+  containers:
+    - name: app
+      image: nginx
+      ports:
+        - containerPort: 80

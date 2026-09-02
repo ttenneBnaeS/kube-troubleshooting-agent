@@ -16,6 +16,7 @@ from models.config import ModelTier, get_chat_model
 from prompts import load_prompt
 from rag import search_k8s_docs_tool
 from tools import TOOLS, get_pod_status, get_recent_events
+from tools.errors import describe_tool_error
 
 ALL_TOOLS = [*TOOLS, search_k8s_docs_tool]
 TOOLS_BY_NAME = {t.name: t for t in ALL_TOOLS}
@@ -35,7 +36,7 @@ def _investigation_summary(state: AgentState) -> str:
 async def intake(state: AgentState) -> dict:
     model = get_chat_model(ModelTier.FAST).with_structured_output(Scope)
     messages = [
-        SystemMessage(content=load_prompt("intake_v1")),
+        SystemMessage(content=load_prompt("intake_v2")),
         *state.messages,
         HumanMessage(content=state.user_request),
     ]
@@ -49,13 +50,26 @@ def route_after_intake(state: AgentState) -> str:
     return "gather_context"
 
 
+async def _sweep(fn, **kwargs):
+    """Run one initial-sweep tool, returning its error as data if it fails.
+
+    The sweep is deterministic and runs before any planning, so an
+    unreachable cluster or a namespace that doesn't exist would otherwise
+    abort the run with a raw exception instead of letting `plan` and
+    `diagnose` say so in terms the user can act on.
+    """
+    try:
+        results = await asyncio.to_thread(fn, **kwargs)
+    except Exception as exc:
+        return describe_tool_error(exc)
+    return [r.model_dump() for r in results]
+
+
 async def gather_context(state: AgentState) -> dict:
     namespace = state.scope.namespace if state.scope else None
-    pods = await asyncio.to_thread(get_pod_status, namespace=namespace)
-    events = await asyncio.to_thread(get_recent_events, namespace=namespace)
     snapshot = {
-        "pods": [p.model_dump() for p in pods],
-        "events": [e.model_dump() for e in events],
+        "pods": await _sweep(get_pod_status, namespace=namespace),
+        "events": await _sweep(get_recent_events, namespace=namespace),
     }
     record = ToolCallRecord(
         tool_name="initial_sweep",
@@ -92,8 +106,22 @@ def route_after_plan(state: AgentState) -> str:
 
 async def execute_tool(state: AgentState) -> dict:
     call = state.pending_tool_call
-    tool = TOOLS_BY_NAME[call["name"]]
-    result = await tool.ainvoke(call["args"])
+    tool = TOOLS_BY_NAME.get(call["name"])
+
+    # A tool call that fails is usually evidence, not an accident — asking
+    # for a Secret and getting 404 is how "the referenced Secret doesn't
+    # exist" gets confirmed. Letting the exception escape would kill the
+    # whole run at the exact moment the answer arrived, so failures are
+    # recorded into the investigation log and the planner decides what
+    # they mean.
+    if tool is None:
+        result = json.dumps({"error": "unknown_tool", "message": f"no tool named {call['name']!r}"})
+    else:
+        try:
+            result = await tool.ainvoke(call["args"])
+        except Exception as exc:
+            result = json.dumps(describe_tool_error(exc))
+
     record = ToolCallRecord(tool_name=call["name"], args=call["args"], result=result)
     return {
         "investigation_log": [*state.investigation_log, record],
