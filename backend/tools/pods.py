@@ -22,6 +22,12 @@ def get_pod_status(namespace: str | None = None, pod_name: str | None = None) ->
 
 def _normalize_pod(pod: k8s.V1Pod) -> PodStatusResult:
     statuses = pod.status.container_statuses or []
+    # Init container statuses live in a separate list on the API object.
+    # Reading only `container_statuses` left an init failure undiagnosable:
+    # the app container reports waiting/PodInitializing, which says the pod
+    # is blocked behind init but names neither the failing init container
+    # nor its reason, and nothing else in the result did either.
+    init_statuses = pod.status.init_container_statuses or []
     created = pod.metadata.creation_timestamp
     age_seconds = (datetime.now(UTC) - created).total_seconds() if created else 0.0
 
@@ -30,6 +36,8 @@ def _normalize_pod(pod: k8s.V1Pod) -> PodStatusResult:
         namespace=pod.metadata.namespace,
         phase=pod.status.phase or "Unknown",
         pod_ready=_pod_ready(pod),
+        labels=dict(pod.metadata.labels or {}),
+        init_containers=[_normalize_container(cs) for cs in init_statuses],
         containers=[_normalize_container(cs) for cs in statuses],
         age_seconds=age_seconds,
         node_name=pod.spec.node_name,

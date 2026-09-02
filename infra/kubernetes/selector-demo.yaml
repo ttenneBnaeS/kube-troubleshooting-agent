@@ -1,0 +1,72 @@
+# Failure mode: Service selector matches no pods — the Deployment labels
+# its pods `component=search,tier=api`, but the Service selects
+# `component=search,tier=frontend`. One key is wrong, so the Service
+# resolves and has a ClusterIP but its endpoint list is empty, and every
+# request to it fails with no backend.
+#
+# Nothing is unhealthy anywhere: both replicas are Running and Ready with
+# zero restarts, the Deployment reports full availability, and no Warning
+# event is ever emitted — a selector that matches nothing is not an error
+# condition in Kubernetes, just an empty set. Diagnosing it requires
+# comparing two fields returned by two different tools: the Service's
+# `selector` (get_service_endpoints) against the pods' `labels`
+# (get_pod_status).
+#
+# The labels deliberately do not mirror the workload's name, but be aware
+# of what that did and didn't buy — this was measured, twice.
+#
+# Mutation testing (hiding `labels` from the agent entirely) showed this
+# scenario still passes without them. It passed when the pods were
+# labelled `app=search-api` (the agent inferred the label from the
+# Deployment's name) and it still passed after relabelling to
+# `component`/`tier` (the agent inferred `tier=api` from the Service's
+# `tier=frontend` plus the name `search-api`). Both times it asserted a
+# label it had never seen, and both times it was right.
+#
+# The real reason it is insensitive is structural, not a naming problem:
+# diagnosing "the selector matches nothing" needs only the Service's
+# selector and an empty endpoint list, both of which come from
+# get_service_endpoints alone. The pods' actual labels are needed for a
+# *correct fix*, not for the diagnosis — so grading the mechanism can
+# never require them. Making this a genuine test of the labels field
+# would mean grading the remediation's specific selector value against a
+# label that cannot be inferred from anything else in the namespace.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: search-api
+  labels:
+    app: search-api
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      component: search
+      tier: api
+  template:
+    metadata:
+      labels:
+        component: search
+        tier: api
+    spec:
+      containers:
+        - name: nginx
+          image: nginx
+          ports:
+            - containerPort: 80
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: search-api
+spec:
+  # `tier` is wrong: no pod carries `tier=frontend`, they carry
+  # `tier=api`. Note that neither label can be guessed from the
+  # Deployment or Service name — reading the pods' actual labels is the
+  # only way to know what the selector should say.
+  selector:
+    component: search
+    tier: frontend
+  ports:
+    - port: 80
+      targetPort: 80

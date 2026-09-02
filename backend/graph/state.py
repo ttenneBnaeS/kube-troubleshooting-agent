@@ -6,7 +6,7 @@ normalized structured data, and judgment nodes (LLM) reasoning over it.
 """
 
 from langchain_core.messages import BaseMessage
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 # Cap on plan->execute_tool iterations (docs/architecture.md §7 "Loop
 # guard"). On hitting this, `plan` routes straight to `diagnose` instead
@@ -33,9 +33,23 @@ class ToolCallRecord(BaseModel):
 
 
 class Diagnosis(BaseModel):
-    root_cause: str
-    confidence: str  # "high" | "medium" | "low"
-    citations: list[str] = []
+    """Structured output from the `diagnose` node.
+
+    Every field has a default on purpose. `with_structured_output` does
+    not guarantee the model fills each one, and a missing field on a
+    required schema raises `ValidationError` *inside the graph* — killing
+    a run that had already gathered all the evidence it needed, at the
+    last step. Defaulting is strictly better than crashing: a diagnosis
+    that arrives without a stated confidence is still a diagnosis, and
+    `confidence` defaults to "low" rather than "high" so an omission can
+    never read as certainty.
+    """
+
+    root_cause: str = Field(default="", description="The underlying cause, not the symptom.")
+    confidence: str = Field(default="low", description='One of "high", "medium", or "low".')
+    citations: list[str] = Field(
+        default_factory=list, description="Specific evidence from the investigation supporting the root cause."
+    )
 
 
 class AgentState(BaseModel):

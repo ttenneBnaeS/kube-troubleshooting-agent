@@ -1,0 +1,85 @@
+# Failure mode: NetworkPolicy blocking traffic — `orders-api` is fronted
+# by a policy that only admits pods labelled `app: allowed-client`, but the
+# client that needs to reach it is labelled `app: orders-client`. Its
+# packets are dropped silently.
+#
+# This is the most adversarial scenario in the catalog for a
+# status-oriented agent, and deliberately so: every pod is Running and
+# Ready, the Deployment is fully available, the Service has ready
+# endpoints, and there are no Warning events anywhere — a dropped packet
+# produces no Kubernetes object state at all. The client's logs show a
+# timeout rather than a name-resolution error (which is what separates
+# this from dns-demo), and the only tool that can explain it is
+# get_network_policies. Requires a CNI that enforces NetworkPolicy;
+# verified against the kindnetd build on the `kube-troubleshoot` cluster.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: orders-api
+  labels:
+    app: orders-api
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: orders-api
+  template:
+    metadata:
+      labels:
+        app: orders-api
+    spec:
+      containers:
+        - name: nginx
+          image: nginx
+          ports:
+            - containerPort: 80
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: orders-api
+spec:
+  selector:
+    app: orders-api
+  ports:
+    - port: 80
+      targetPort: 80
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: orders-client
+  labels:
+    app: orders-client
+spec:
+  containers:
+    - name: client
+      image: busybox
+      command: ["sh", "-c"]
+      args:
+        - |
+          while true; do
+            echo "[orders-client] GET http://orders-api/"
+            wget -q -T 5 -O- http://orders-api/
+            echo "[orders-client] request failed with exit code $?, retrying in 10s"
+            sleep 10
+          done
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: orders-api-allow-known-clients
+spec:
+  podSelector:
+    matchLabels:
+      app: orders-api
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: allowed-client
+      ports:
+        - protocol: TCP
+          port: 80

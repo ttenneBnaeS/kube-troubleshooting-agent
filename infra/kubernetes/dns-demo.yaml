@@ -1,0 +1,66 @@
+# Failure mode: DNS resolution failure from a wrong Service name — the
+# client is configured to talk to `payments-api`, but the Service that
+# actually exists is named `payments`. Every request dies at name
+# resolution with "bad address".
+#
+# The hard part (and the point of the scenario): nothing looks broken from
+# the outside. The client pod is Running with zero restarts, the backend
+# Deployment is healthy, its Service has ready endpoints, and no Warning
+# event is ever emitted — DNS NXDOMAIN isn't a Kubernetes event. The only
+# evidence is in the client's container logs, so the planner has to decide
+# to read logs for a pod that pod status says is fine, then cross-check
+# the Service list to find the real name.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: dns-demo
+  labels:
+    app: dns-demo
+spec:
+  containers:
+    - name: client
+      image: busybox
+      command: ["sh", "-c"]
+      args:
+        - |
+          while true; do
+            echo "[client] GET http://payments-api:8080/health"
+            wget -q -T 5 -O- http://payments-api:8080/health
+            echo "[client] request failed with exit code $?, retrying in 10s"
+            sleep 10
+          done
+---
+# The backend the client *meant* to reach. Healthy, and named `payments`
+# rather than `payments-api` — this is the fix the agent should land on.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: payments
+  labels:
+    app: payments
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: payments
+  template:
+    metadata:
+      labels:
+        app: payments
+    spec:
+      containers:
+        - name: nginx
+          image: nginx
+          ports:
+            - containerPort: 80
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: payments
+spec:
+  selector:
+    app: payments
+  ports:
+    - port: 8080
+      targetPort: 80

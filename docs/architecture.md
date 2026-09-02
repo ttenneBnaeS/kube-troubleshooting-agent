@@ -128,8 +128,43 @@ Diagnosis correctness is measured against injected failure scenarios with
 golden labels (true root cause + expected remediation category), run
 against a Kind cluster. Scored on: diagnosis correctness (primary),
 tool-call efficiency (catches thrashing), and grounding (did the
-recommendation cite the right remediation). LangSmith tracing is wired in
-from the start so failed runs are debuggable per-node, not just pass/fail.
+recommendation cite the right remediation). LangSmith tracing is
+env-gated so failed runs are debuggable per-node, not just pass/fail.
+
+Implemented in `backend/eval/` (see its README for the mechanics). The
+decisions worth recording here:
+
+- **Isolation.** Each scenario is applied into a throwaway `eval-<id>`
+  namespace and torn down afterwards, rather than run against the shared
+  demo pods in `default`. Co-resident scenarios would mean the initial
+  sweep returns eight broken pods every time, which conflates "can it
+  diagnose" with "can it stay on scope."
+- **Readiness gating.** The harness waits until a scenario's failure is
+  genuinely observable (container reason, not-Ready pod, or an expected
+  log line) before invoking the agent. Otherwise the run grades the
+  harness's timing rather than the agent.
+- **Two scorers, one verdict.** A deterministic signal check (synonym
+  groups over the golden label, word-boundary matched) runs alongside an
+  LLM judge. The judge owns correctness, because keyword matching can't
+  distinguish a paraphrase from a miss; the signal check exists to name
+  *which* expected signal was absent. `forbidden_terms` are advisory and
+  never flip a verdict — an agent correctly writing "this is not a
+  NetworkPolicy issue" would otherwise be scored as claiming the wrong
+  cause. Scorer disagreements are reported, not smoothed away.
+- **Trust domains.** The harness mutates the cluster (`kubectl
+  apply`/`delete`); the agent under test cannot. The read-only boundary in
+  §5 constrains the agent, not its test rig.
+
+### Failed tool calls are evidence
+
+The first eval run surfaced a real defect: the agent called
+`describe_resource(kind="secret", ...)` to confirm a referenced Secret was
+missing, the API returned 404 — which *is* the answer — and the raw
+exception propagated out of `execute_tool` and killed the entire graph
+run. Tool failures are now normalized (`tools/errors.py`) and appended to
+the investigation log so the planner can reason about them, and the
+deterministic initial sweep is guarded the same way. A tool that fails is
+frequently the fact the diagnosis turns on, not an accident.
 
 ## 10. Repository layout
 
@@ -142,7 +177,7 @@ backend/
   rag/          # corpus loading, embedding, retriever
   prompts/      # versioned prompt templates
   models/       # model config, tier routing
-eval/           # scenarios, golden labels, harness, scorers
+  eval/         # scenarios, golden labels, harness, scorers
 frontend/
 infra/
   docker/
@@ -153,13 +188,35 @@ docs/
 demo/
 ```
 
+`eval/` sits under `backend/` rather than at the repo root as originally
+sketched: backend modules are top-level (`graph`, `tools`, `models` — no
+`backend` package prefix), so a root-level `eval/` could not import the
+graph without `sys.path` manipulation. Under `backend/` it runs in the
+same uv environment as the code it tests. The scenario *manifests* stay in
+`infra/kubernetes/` as planned.
+
 ## 11. Status
 
-As of Week 4: the FastAPI streaming skeleton, the Next.js chat UI, the
-read-only tool catalog (§4), the RAG pipeline (§8), and the LangGraph
-state machine (§6-7) all exist and are wired together — `backend/agent/`
-and `backend/graph/` are no longer placeholders. Not yet built: the eval
-harness (§9, Week 5), checkpointed conversational memory (§7's
-"Checkpointing & memory" — Week 6; today's multi-turn context is the
-client resending full history into `AgentState.messages`), and the MCP
-server (Week 8).
+As of Week 5: the FastAPI streaming skeleton, the Next.js chat UI, the
+read-only tool catalog (§4), the RAG pipeline (§8), the LangGraph state
+machine (§6-7), and the eval harness (§9) all exist and are wired
+together. The failure-scenario catalog is at thirteen scenarios, each with a golden
+label and an easy/medium/hard tier: CrashLoopBackOff, ImagePullBackOff,
+OOMKilled, readiness probe, missing Secret, ConfigMap key mismatch,
+DNS/service-name mismatch, NetworkPolicy, Service-selector mismatch, a
+selector bug behind a loud unrelated distractor, init-container failure, a
+cross-namespace NetworkPolicy, and an application-level failure hidden in
+a noisy namespace.
+
+The tool catalog grew two entries in Week 5, both driven by scenarios that
+were otherwise unsolvable by construction rather than merely hard:
+`get_network_policies` (a policy drop produces no unhealthy object state
+anywhere) and configmap/secret support in `describe_resource` (a
+wrong-key diagnosis depends on which keys the object really has).
+
+Not yet built: checkpointed conversational memory (§7's "Checkpointing &
+memory" — Week 6; today's multi-turn context is the client resending full
+history into `AgentState.messages`), the investigation-trail UI (Week 6),
+tests and Dockerization (Week 7), and the MCP server (Week 8). The
+RBAC-scoped read-only credentials called for in §5 remain open —
+enforcement today is code-layer only.
