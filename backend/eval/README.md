@@ -1,7 +1,7 @@
 # Eval harness
 
 Turns "the agent works" into a number (`docs/architecture.md` §9, plan
-§6). Thirteen injected failure scenarios, each with a golden label stating
+§6). Twenty injected failure scenarios plus one healthy control, each with a golden label stating
 the true root cause; the harness breaks a cluster in a known way, runs the
 agent against it, and scores the diagnosis.
 
@@ -34,13 +34,86 @@ than Kubernetes:
   cause plus a loud, genuinely-broken, irrelevant pod. Failing this while
   `selector` passes would mean salience, not capability.
 
+## Scenarios built to fail
+
+The first thirteen scenarios all passed, which says more about the suite
+than the agent. A suite where nothing fails can't show where the agent
+stops working. So the last seven each target one known limit, and their
+`notes` name which one:
+
+| Limit | Scenarios | What's being measured |
+|---|---|---|
+| Reasoning trap | `leading`, `slowstart`, `redherring` | Evidence is reachable, but the obvious reading is wrong. `leading` is an A/B against `networkpolicy` with the user asserting "it's DNS". |
+| Truncated default | `logtail`, `eventflood` | The answer is outside the 100-line log tail or the sweep's 20-newest events. The planner can widen either; does it? |
+| Capability gap | `targetport` | No tool returns the pod spec, so the container's real port is invisible. Measures honesty, not skill. |
+| Step budget | `needle` | 16 identical pods, one bad log stream, 8-call loop guard. Expected to fail; the question is whether the diagnosis says what it didn't check. |
+
+**Measured (2026-10-03/04).** Results vary from run to run, so a
+single run is not a score:
+
+| Run | Scope | Score | Failed | Note |
+|---|---|---|---|---|
+| A | built-to-fail 7 | 5/7 | `logtail` (crashed), `needle` | `.content` bug, below. A `logtail` re-run alone was also wrong |
+| B | full suite | 19/21 | `logtail`, `needle` | |
+| C | full suite | 17/21 | `logtail`, `needle`, `crossns`, `targetport` | last run before the namespace fix |
+| D | full suite | 19/21 | `logtail`, `needle` | after the namespace fix |
+
+Most predicted failures didn't happen. The reasoning tier sees through
+one-step traps: it rejected the user's DNS guess, read the previous
+container's logs on `slowstart`, and recovered `eventflood`'s buried
+event by filtering events to the pod. What does fail:
+
+- `logtail` — wrong in every run, and it has never widened the log tail.
+  Instead it makes up an explanation ("a busybox stub serving canned
+  data", "an orphan pod missing a CronJob", "rates hardcoded in the
+  busybox script"), usually at low confidence and once at medium. This is
+  the failure that matters most: a made-up answer rather than an honest
+  "I couldn't find it".
+- `needle` — wrong in every run at **low** confidence, listing which
+  shards it never checked, so it fails honestly. It's a pure step-budget
+  failure: the planner reads shard-0..7 in order and hits the guard.
+- `targetport` — failed once (run C) on a scorer disagreement. The signal
+  check passed because it named the port mismatch, but the judge failed it
+  for asserting at medium confidence that nothing in the container listens
+  at all, a claim no tool can support. In run D it passed at low
+  confidence. It's on the line between the two, so read it over several
+  runs.
+- `crossns` — failed once (run C) by hitting the loop guard. See the
+  namespace bug below.
+
+### Defects eval caught
+
+- **`recommend` crash (run A).** `recommend` returned `response.content`,
+  which is a list of blocks rather than a string when the model emits a
+  thinking block. Fixed (`.text`), in the API streaming path too.
+- **Omitted namespace misrouted tool calls (runs A-C).** Every
+  namespaced tool takes `namespace` as optional, and an omitted one fell
+  back to the backend's configured default (`default`) rather than the
+  namespace the user asked about. The call didn't fail. It returned a 404
+  or an empty list from the wrong namespace, which the planner read as
+  evidence. In run C's `crossns`, 4 of 8 calls went to `default` (one
+  sent `namespace: null` explicitly); three came back "not found" and
+  backed the wrong conclusion ("the `stock` Service doesn't exist"),
+  and the run hit the loop guard. `execute_tool` now
+  fills in the scope's namespace when the planner leaves it out (an
+  explicit one still wins, which cross-namespace lookups need), and logs
+  the args actually used so the planner can see where it looked. The
+  omission is a regular model habit, not a rare one: it appeared in runs
+  A (`needle`, 3 calls), B (`noisy`, 1) and C (`crossns`, 4), in all 3
+  standalone `crossns` re-runs after the fix (all passed), and 3 times in
+  run D. `namespace_filled` on each tool call and the "namespace omitted by
+  planner Nx" summary line keep it measured. Caveat: `crossns` also passed
+  in run B without the fix, so these runs show the fix stops wrong-namespace
+  results from misleading the planner, not that it alone decides the
+  outcome.
+
 ## Running it
 
 Needs a reachable Kind cluster and `kubectl` on PATH.
 
 ```bash
 cd backend
-uv run python -m eval                  # all 8 scenarios
+uv run python -m eval                  # all scenarios
 uv run python -m eval -s dns -s secret # just these
 uv run python -m eval --list           # what's available
 uv run python -m eval --no-judge       # deterministic scoring only, no LLM judge

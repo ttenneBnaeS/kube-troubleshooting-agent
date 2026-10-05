@@ -52,9 +52,11 @@ async def chat(req: ChatRequest) -> EventSourceResponse:
             ):
                 if stream_mode == "messages":
                     message, metadata = chunk
-                    if metadata.get("langgraph_node") == "recommend" and message.content:
+                    # `.text` drops thinking blocks; `.content` would be a
+                    # list of blocks whenever the model thinks first.
+                    if metadata.get("langgraph_node") == "recommend" and message.text:
                         streamed_recommendation = True
-                        yield {"event": "token", "data": message.content}
+                        yield {"event": "token", "data": message.text}
                 elif stream_mode == "values":
                     final_state = chunk
 

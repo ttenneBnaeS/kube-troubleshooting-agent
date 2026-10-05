@@ -40,6 +40,7 @@ class ToolCallSummary:
     tool_name: str
     args: dict
     result_chars: int
+    namespace_filled: bool = False
 
 
 @dataclass
@@ -67,6 +68,8 @@ class RunRecord:
 
     tool_calls: list[ToolCallSummary] = field(default_factory=list)
     planner_tool_calls: int = 0
+    # Planner calls that omitted `namespace` and had the scope's filled in.
+    namespace_fills: int = 0
     loop_guard_triggered: bool = False
     tools_used: list[str] = field(default_factory=list)
     expected_tools_used: list[str] = field(default_factory=list)
@@ -162,9 +165,15 @@ def _populate_from_state(record: RunRecord, final_state, scenario: Scenario) -> 
         record.clarifying_question = state.scope.clarifying_question or ""
 
     record.tool_calls = [
-        ToolCallSummary(tool_name=c.tool_name, args=c.args, result_chars=len(c.result))
+        ToolCallSummary(
+            tool_name=c.tool_name,
+            args=c.args,
+            result_chars=len(c.result),
+            namespace_filled=c.namespace_filled,
+        )
         for c in state.investigation_log
     ]
+    record.namespace_fills = sum(1 for c in record.tool_calls if c.namespace_filled)
     planner_calls = [c for c in record.tool_calls if c.tool_name != INITIAL_SWEEP]
     record.planner_tool_calls = len(planner_calls)
     record.tools_used = sorted({c.tool_name for c in planner_calls})

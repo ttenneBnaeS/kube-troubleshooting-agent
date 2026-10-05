@@ -28,6 +28,7 @@ class Summary:
     loop_guard_hits: int
     disagreements: int
     clarification_requests: int
+    namespace_fills: int
 
     @property
     def accuracy(self) -> float:
@@ -101,6 +102,7 @@ def summarize(records: list[RunRecord]) -> Summary:
         loop_guard_hits=sum(1 for r in scored if r.loop_guard_triggered),
         disagreements=sum(1 for r in scored if r.score and not r.score.scorers_agree),
         clarification_requests=sum(1 for r in scored if r.clarification_requested),
+        namespace_fills=sum(r.namespace_fills for r in scored),
     )
 
 
@@ -174,7 +176,8 @@ def print_report(records: list[RunRecord], summary: Summary, results_path: Path)
         f"remediation appropriate in {summary.remediation_ok}/{summary.scored}; "
         f"loop guard hit {summary.loop_guard_hits}x; "
         f"scorer disagreements {summary.disagreements}; "
-        f"ended at intake {summary.clarification_requests}x"
+        f"ended at intake {summary.clarification_requests}x; "
+        f"namespace omitted by planner {summary.namespace_fills}x"
     )
     if summary.failed_setup or summary.failed_agent:
         print(f"not scored: {summary.failed_setup} setup failure(s), {summary.failed_agent} agent error(s)")

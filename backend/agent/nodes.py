@@ -94,7 +94,7 @@ async def plan(state: AgentState) -> dict:
     ]
     response = await model.ainvoke(messages)
     tool_call = response.tool_calls[0] if response.tool_calls else None
-    hypothesis = response.content if isinstance(response.content, str) and response.content else state.hypothesis
+    hypothesis = response.text or state.hypothesis
     return {"hypothesis": hypothesis, "pending_tool_call": tool_call}
 
 
@@ -107,6 +107,19 @@ def route_after_plan(state: AgentState) -> str:
 async def execute_tool(state: AgentState) -> dict:
     call = state.pending_tool_call
     tool = TOOLS_BY_NAME.get(call["name"])
+    args = dict(call["args"])
+
+    # Every namespaced tool takes `namespace` as optional, and an omitted
+    # one falls back to the configured default (usually `default`) — not
+    # the namespace the user asked about. The planner drops it often enough
+    # that eval caught it misrouting calls: a 404 from the wrong namespace
+    # reads as "that resource doesn't exist". So fill in the scope's
+    # namespace here; an explicit one (e.g. a cross-namespace lookup) wins.
+    scope_ns = state.scope.namespace if state.scope else None
+    namespace_filled = False
+    if tool is not None and "namespace" in tool.args and not args.get("namespace") and scope_ns:
+        args["namespace"] = scope_ns
+        namespace_filled = True
 
     # A tool call that fails is usually evidence, not an accident — asking
     # for a Secret and getting 404 is how "the referenced Secret doesn't
@@ -118,11 +131,15 @@ async def execute_tool(state: AgentState) -> dict:
         result = json.dumps({"error": "unknown_tool", "message": f"no tool named {call['name']!r}"})
     else:
         try:
-            result = await tool.ainvoke(call["args"])
+            result = await tool.ainvoke(args)
         except Exception as exc:
             result = json.dumps(describe_tool_error(exc))
 
-    record = ToolCallRecord(tool_name=call["name"], args=call["args"], result=result)
+    # Log the args actually used, so the planner sees which namespace it
+    # really queried.
+    record = ToolCallRecord(
+        tool_name=call["name"], args=args, result=result, namespace_filled=namespace_filled
+    )
     return {
         "investigation_log": [*state.investigation_log, record],
         "pending_tool_call": None,
@@ -158,4 +175,8 @@ async def recommend(state: AgentState) -> dict:
         ),
     ]
     response = await model.ainvoke(messages)
-    return {"recommendation": response.content}
+    # `.text`, not `.content`: when the model emits a thinking block,
+    # `content` is a list of blocks rather than a string, which fails
+    # AgentState validation after the run has already finished. Eval
+    # caught this on `logtail`; it doesn't happen on every response.
+    return {"recommendation": response.text}

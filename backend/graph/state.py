@@ -30,6 +30,10 @@ class ToolCallRecord(BaseModel):
     tool_name: str
     args: dict
     result: str
+    # True when `execute_tool` supplied the scope's namespace because the
+    # planner left it out. Kept so eval can still count how often the
+    # model omits it, even though the omission no longer misroutes the call.
+    namespace_filled: bool = False
 
 
 class Diagnosis(BaseModel):

@@ -1,0 +1,57 @@
+# Failure mode: the one Warning event that names the cause is pushed out
+# of the initial sweep's window by a flood of routine Normal events.
+#
+# `billing` mounts a ConfigMap volume `billing-config` that doesn't exist,
+# so it sits in ContainerCreating and the kubelet emits a FailedMount
+# event naming the missing ConfigMap — retried with backoff, so only
+# every minute or two. Alongside it, `heartbeat` is a CronJob firing every
+# minute with four parallel pods, which generates ~25 Normal events a
+# minute (Scheduled/Pulled/Created/Started per pod, plus Job and CronJob
+# bookkeeping).
+#
+# Truncation probe: gather_context reads the 20 newest events in the
+# namespace. Once the flood has run for a couple of minutes, FailedMount
+# is usually not among them, and pod status for `billing` says only
+# ContainerCreating — which names no cause. The planner can recover by
+# calling get_recent_events filtered to the pod (involved_object_name) or
+# with a larger limit; this measures whether it does. Eval-only: a
+# per-minute CronJob is not something to leave running in `default`.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: billing
+  labels:
+    app: billing
+spec:
+  containers:
+    - name: billing
+      image: busybox
+      command: ["sh", "-c", "cat /etc/billing/config.yaml; sleep 3600"]
+      volumeMounts:
+        - name: config
+          mountPath: /etc/billing
+  volumes:
+    - name: config
+      configMap:
+        name: billing-config
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: heartbeat
+spec:
+  schedule: "* * * * *"
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 1
+  jobTemplate:
+    spec:
+      parallelism: 4
+      completions: 4
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: ping
+              image: busybox
+              imagePullPolicy: IfNotPresent
+              command: ["sh", "-c", "echo heartbeat ok"]

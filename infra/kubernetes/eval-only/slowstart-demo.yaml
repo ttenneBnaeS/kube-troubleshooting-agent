@@ -1,0 +1,45 @@
+# Failure mode: a liveness probe that kills a slow-starting app before it
+# ever finishes starting. `catalog-cache` spends ~45s warming its cache
+# before it opens port 8080; the probe starts checking at 5s and gives up
+# after three 5s periods, so the kubelet restarts the container at ~20s,
+# every time, forever.
+#
+# Reasoning trap, not a visibility problem: the evidence is all reachable
+# (the probe-failure event says "connection refused" on 8080, and the
+# previous container's logs show it was still warming up), but the
+# obvious reading of "liveness probe failed: connection refused" is a
+# wrong port or path. The probe's port and path are both correct — the
+# fault is timing, and the fix is a startupProbe or a longer
+# initialDelaySeconds/failureThreshold, not a different endpoint.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: catalog-cache
+  labels:
+    app: catalog-cache
+spec:
+  # busybox sh as PID 1 ignores SIGTERM; without this every liveness kill
+  # waits out the default 30s grace period and the scenario takes minutes
+  # to reach its failure state.
+  terminationGracePeriodSeconds: 2
+  containers:
+    - name: app
+      image: busybox
+      command: ["sh", "-c"]
+      args:
+        - |
+          echo "[catalog-cache] starting; warming product cache before serving (typically ~45s)"
+          for pct in 10 20 30 40 50 60 70 80 90; do
+            sleep 5
+            echo "[catalog-cache] cache warm-up ${pct}% complete"
+          done
+          echo "[catalog-cache] cache warm, listening on :8080"
+          mkdir -p /www && echo ok > /www/index.html
+          exec httpd -f -p 8080 -h /www
+      livenessProbe:
+        httpGet:
+          path: /
+          port: 8080
+        initialDelaySeconds: 5
+        periodSeconds: 5
+        failureThreshold: 3

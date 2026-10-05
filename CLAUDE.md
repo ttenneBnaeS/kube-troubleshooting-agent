@@ -30,8 +30,10 @@ corpus → Voyage AI embeddings → Qdrant) exposed as another tool.
 `recommend`) that `backend/api/main.py`'s chat endpoint drives directly —
 the Week 1-3 bounded probe/execute round-trip in `main.py` is gone.
 `backend/eval/` holds the Week 5 eval harness, and
-`infra/kubernetes/` now has thirteen golden-labelled failure scenarios
-(tiered easy/medium/hard) plus one healthy control.
+`backend/eval/scenarios.py` has twenty golden-labelled failure scenarios
+(tiered easy/medium/hard) plus one healthy control; the last seven were
+built specifically to make the agent fail (see `backend/eval/README.md`,
+"Scenarios built to fail").
 
 Still open: `tests/` and `demo/` are empty placeholders; conversational
 memory is still "client resends full history" (`AgentState.messages`), not
@@ -67,7 +69,7 @@ for scenarios to break rather than on agent latency.
 
 ```bash
 cd backend
-uv run python -m eval                   # all thirteen scenarios
+uv run python -m eval                   # all scenarios
 uv run python -m eval -s dns -s secret  # a subset
 uv run python -m eval --list            # what's available
 uv run python -m eval --no-judge        # deterministic scoring only (no LLM judge calls)
@@ -114,9 +116,12 @@ unrelated crashlooping pod — an anchoring A/B against `selector-demo`),
 Init), and `web-demo.yaml` (healthy nginx Deployment+Service, for
 exercising `get_service_endpoints` against something that works).
 
-Two scenarios live in `infra/kubernetes/eval-only/` instead
-(`crossns-demo.yaml` + `crossns-backend-demo.yaml`, which need two
-namespaces, and `noisy-demo.yaml`, which creates 13 pods). They're kept
+Several scenarios live in `infra/kubernetes/eval-only/` instead:
+`crossns-demo.yaml` + `crossns-backend-demo.yaml` (needs two namespaces),
+`noisy-demo.yaml` (13 pods), and the built-to-fail set (`slowstart`,
+`redherring`, `logtail`, `eventflood` (a per-minute CronJob), `targetport`,
+`needle` (16 pods)). `leading` reuses `networkpolicy-demo.yaml` with a
+different user request. They're kept
 out of the demo bundle by living in a subdirectory — `kubectl apply -f
 infra/kubernetes/` doesn't recurse — and the eval harness references them
 by relative path and builds their namespaces itself.
@@ -247,14 +252,17 @@ public by construction).
   `docs/architecture.md` §5 calls for as defense in depth; enforcement
   today is code-layer only.
 - **Nothing in a node may raise on a recoverable condition.** Eval has now
-  caught three crashes of this shape, each killing a run that had already
+  caught four crashes of this shape, each killing a run that had already
   gathered the evidence it needed: a 404 escaping `execute_tool`, an
-  unreachable sweep in `gather_context`, and `Diagnosis` raising
+  unreachable sweep in `gather_context`, `Diagnosis` raising
   `ValidationError` because `with_structured_output` returned without the
-  required `confidence` field. Hence every field on `Diagnosis` and
+  required `confidence` field, and `recommend` returning
+  `response.content` — a list of blocks, not a string, whenever the model
+  emits a thinking block. Hence every field on `Diagnosis` and
   `Scope` carries a default (`confidence` defaults to `"low"`, so an
   omission never reads as certainty). Don't make a structured-output
-  field required.
+  field required, and read model text via `.text`, never `.content`
+  (`api/main.py`'s streaming path included).
 - **Failed tool calls are evidence, not accidents.** `execute_tool`
   catches exceptions from a tool call, normalizes them via
   `tools/errors.py`, and appends the result to the investigation log
@@ -263,7 +271,11 @@ public by construction).
   a real bug the eval harness caught on its first run, where the agent
   asked about a missing Secret, got a correct 404 (*the answer*), and the
   raw `ApiException` killed the entire graph run. Don't reintroduce a bare
-  `await tool.ainvoke(...)` there.
+  `await tool.ainvoke(...)` there. `execute_tool` also fills in
+  `scope.namespace` when the planner omits `namespace` (it does so in most
+  runs); without that the call silently hits `default`, and the resulting
+  404 reads as "doesn't exist" — see `backend/eval/README.md`, "Defects
+  eval caught".
 - **RAG** (`backend/rag/`): `corpus/` is ~22 curated K8s/kubectl doc pages
   (YAML frontmatter + markdown, scoped to the failure-scenario catalog,
   not a full site crawl) → `index.py` chunks them

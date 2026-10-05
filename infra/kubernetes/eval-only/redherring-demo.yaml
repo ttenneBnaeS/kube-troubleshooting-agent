@@ -1,0 +1,58 @@
+# Failure mode: a Service selector mismatch (quiet) underneath loud,
+# harmless errors in the very pods the Service is meant to front.
+#
+# The `ledger` Service selects `app=ledger,version=v2`; the Deployment
+# labels its pods `version=v1`, so the endpoint list is empty. Meanwhile
+# every ledger pod logs an ERROR line every few seconds about failing to
+# push metrics to a statsd sidecar that doesn't exist — real errors, but
+# irrelevant to serving traffic. The user request points at those logs.
+#
+# Same root-cause family as selector-demo, deliberately: selector and
+# distractor already show the agent can find a selector mismatch when the
+# noise is in a *different* pod. This asks whether that holds when the
+# noise is in the target workload itself and the user has pre-blamed it.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ledger
+  labels:
+    app: ledger
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: ledger
+      version: v1
+  template:
+    metadata:
+      labels:
+        app: ledger
+        version: v1
+    spec:
+      containers:
+        - name: ledger
+          image: busybox
+          command: ["sh", "-c"]
+          args:
+            - |
+              mkdir -p /www && echo '{"status":"ok"}' > /www/index.html
+              httpd -p 8080 -h /www
+              echo "[ledger] api listening on :8080"
+              while true; do
+                echo "[ledger] ERROR metrics: failed to push 14 metrics to statsd at 127.0.0.1:8125: connection refused; dropping batch"
+                sleep 4
+              done
+          ports:
+            - containerPort: 8080
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ledger
+spec:
+  selector:
+    app: ledger
+    version: v2
+  ports:
+    - port: 80
+      targetPort: 8080

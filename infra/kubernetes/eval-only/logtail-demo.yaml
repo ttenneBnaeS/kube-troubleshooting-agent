@@ -1,0 +1,39 @@
+# Failure mode: the only evidence is a single warning logged at startup,
+# buried under a burst of routine request logs.
+#
+# `pricing` logs that CURRENCY_FEED_URL is unset and it is falling back to
+# a static 2019 rates table, then immediately logs 400 lines of healthy
+# request traffic and keeps logging one per second. The pod is Running
+# and Ready with zero restarts and there are no Warning events.
+#
+# Truncation probe: get_container_logs defaults to tail_lines=100, so a
+# default-arguments log read returns only 200-OK request lines. The
+# planner *can* ask for more (tail_lines is a tool argument), so this
+# measures whether it thinks to widen the window when the tail looks
+# clean, rather than concluding the app is fine.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: pricing
+  labels:
+    app: pricing
+spec:
+  containers:
+    - name: pricing
+      image: busybox
+      command: ["sh", "-c"]
+      args:
+        - |
+          echo "[pricing] loading config"
+          echo "[pricing] WARN CURRENCY_FEED_URL is not set; falling back to bundled static rates table (snapshot 2019-01-01). Quotes will not reflect live exchange rates."
+          echo "[pricing] listening on :8080"
+          i=0
+          while [ $i -lt 400 ]; do
+            i=$((i+1))
+            echo "[pricing] GET /quote?sku=SKU-$((i % 97)) 200 $((i % 40 + 3))ms req=$i"
+          done
+          while true; do
+            i=$((i+1))
+            echo "[pricing] GET /quote?sku=SKU-$((i % 97)) 200 $((i % 40 + 3))ms req=$i"
+            sleep 1
+          done
