@@ -15,8 +15,11 @@ label's synonym list is too narrow or the judge is being generous — so
 the disagreement is recorded per scenario rather than smoothed over.
 """
 
+import json
 import re
 from dataclasses import asdict, dataclass, field
+from functools import lru_cache
+from pathlib import Path
 
 from pydantic import BaseModel, Field, ValidationError
 
@@ -26,6 +29,36 @@ from prompts import load_prompt
 from .scenarios import GoldenLabel
 
 JUDGE_PROMPT = "eval_judge_v2"
+
+CORPUS_MANIFEST = Path(__file__).resolve().parents[1] / "rag" / "corpus" / "manifest.json"
+_URL = re.compile(r"https?://[^\s)\]>\"'`]+")
+
+
+def _normalize_url(url: str) -> str:
+    """Compare pages, not anchors: `.../probes/#readiness` cites `.../probes/`."""
+    return url.split("#", 1)[0].rstrip("/.,;:")
+
+
+@lru_cache(maxsize=1)
+def corpus_urls() -> frozenset[str]:
+    """Source URLs of every indexed doc page: the only URLs a recommendation can honestly cite."""
+    return frozenset(_normalize_url(d["source_url"]) for d in json.loads(CORPUS_MANIFEST.read_text()))
+
+
+def _is_citation(url: str) -> bool:
+    """A link to a public site, not an in-cluster address in a command.
+
+    Recommendations routinely contain `curl http://payments-api:8080/health`
+    style commands; those hosts have no dot (or end in a cluster suffix) and
+    aren't citations, so they mustn't count as made-up sources.
+    """
+    host = url.split("://", 1)[1].split("/", 1)[0].split(":", 1)[0]
+    return "." in host and not host.endswith((".local", ".svc", ".cluster"))
+
+
+def cited_urls(text: str) -> list[str]:
+    """Distinct cited URLs in a recommendation, normalized, in order of first appearance."""
+    return list(dict.fromkeys(_normalize_url(u) for u in _URL.findall(text) if _is_citation(u)))
 
 
 class JudgeVerdict(BaseModel):

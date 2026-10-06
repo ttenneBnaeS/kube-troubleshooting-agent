@@ -84,6 +84,15 @@ class Diagnosis(BaseModel):
     )
 
 
+class ReferenceDoc(BaseModel):
+    """A doc excerpt retrieved by `ground` for `recommend` to cite."""
+
+    title: str
+    source_url: str
+    content: str
+    score: float
+
+
 class AgentState(BaseModel):
     # BaseMessage subclasses aren't plain pydantic models in every
     # langchain-core version, so state validation needs this relaxed.
@@ -101,6 +110,10 @@ class AgentState(BaseModel):
     investigation_log: list[ToolCallRecord] = []
     hypothesis: str | None = None
     diagnosis: Diagnosis | None = None
+    # Set by `ground`: doc excerpts retrieved for the diagnosed cause, and
+    # the retrieval error if that failed (the run continues without docs).
+    reference_docs: list[ReferenceDoc] = []
+    grounding_error: str | None = None
     recommendation: str | None = None
 
     step_count: int = 0

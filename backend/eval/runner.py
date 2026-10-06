@@ -19,7 +19,7 @@ from graph.state import AgentState
 
 from . import cluster
 from .scenarios import Scenario
-from .scorers import DiagnosisScore, score_diagnosis
+from .scorers import DiagnosisScore, cited_urls, corpus_urls, score_diagnosis
 from .tracing import run_config
 
 # The initial sweep is a fixed deterministic node, not a planner decision,
@@ -71,6 +71,12 @@ class RunRecord:
     # Planner calls that omitted `namespace` and had the scope's filled in.
     namespace_fills: int = 0
     loop_guard_triggered: bool = False
+    # Grounding: doc pages `ground` retrieved, the URLs the recommendation
+    # cited, and any cited URL that isn't in the indexed corpus (made up).
+    reference_doc_urls: list[str] = field(default_factory=list)
+    grounding_error: str = ""
+    cited_urls: list[str] = field(default_factory=list)
+    invalid_citations: list[str] = field(default_factory=list)
     tools_used: list[str] = field(default_factory=list)
     expected_tools_used: list[str] = field(default_factory=list)
     expected_tools_missed: list[str] = field(default_factory=list)
@@ -94,6 +100,7 @@ async def run_scenario(
     scenario: Scenario,
     *,
     use_judge: bool = True,
+    rag: bool = True,
     keep_namespace: bool = False,
     setup_timeout: int = cluster.DEFAULT_TIMEOUT_SECONDS,
 ) -> RunRecord:
@@ -120,7 +127,7 @@ async def run_scenario(
         started = time.monotonic()
         final_state = await troubleshooting_graph.ainvoke(
             {"user_request": record.user_request, "messages": []},
-            config=run_config(scenario.id, namespace),
+            config=run_config(scenario.id, namespace, rag=rag),
         )
         record.duration_seconds = round(time.monotonic() - started, 1)
         _populate_from_state(record, final_state, scenario)
@@ -158,6 +165,10 @@ def _populate_from_state(record: RunRecord, final_state, scenario: Scenario) -> 
         record.diagnosis_confidence = state.diagnosis.confidence
         record.diagnosis_citations = list(state.diagnosis.citations)
     record.recommendation = state.recommendation or ""
+    record.reference_doc_urls = [d.source_url for d in state.reference_docs]
+    record.grounding_error = state.grounding_error or ""
+    record.cited_urls = cited_urls(record.recommendation)
+    record.invalid_citations = [u for u in record.cited_urls if u not in corpus_urls()]
     record.loop_guard_triggered = state.loop_guard_triggered
 
     if state.scope:

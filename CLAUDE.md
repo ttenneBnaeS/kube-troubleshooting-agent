@@ -27,7 +27,7 @@ client. `backend/rag/` has a real RAG pipeline (curated K8s/kubectl doc
 corpus → Voyage AI embeddings → Qdrant) exposed as another tool.
 `backend/graph/` and `backend/agent/` hold a real LangGraph state machine
 (`intake` → `gather_context` → `plan`/`execute_tool` loop → `diagnose` →
-`recommend`) that `backend/api/main.py`'s chat endpoint drives directly —
+`ground` → `recommend`) that `backend/api/main.py`'s chat endpoint drives directly —
 the Week 1-3 bounded probe/execute round-trip in `main.py` is gone.
 `backend/eval/` holds the Week 5 eval harness, and
 `backend/eval/scenarios.py` has twenty golden-labelled failure scenarios
@@ -213,7 +213,13 @@ public by construction).
   sweep) → `plan` (reasoning tier, bound to `tools.TOOLS` +
   `rag.search_k8s_docs_tool`) ⇄ `execute_tool` (deterministic, one tool
   call per round) → `diagnose` (reasoning tier, structured `Diagnosis`)
-  → `recommend` (reasoning tier, plain text). The plan↔execute_tool loop
+  → `ground` (deterministic docs retrieval on the diagnosed root cause)
+  → `recommend` (reasoning tier, plain text, cites the retrieved docs).
+  `ground` exists because eval measured the planner making zero docs
+  searches: evidence settles the diagnosis and the public K8s docs
+  overlap with model knowledge, so retrieval's real job is citing
+  sources for the fix, not finding the cause. `configurable.rag=False`
+  turns off both `ground` and the planner's docs tool (`eval --no-rag`). The plan↔execute_tool loop
   is capped at `graph.state.LOOP_GUARD_MAX` (8) — see
   `docs/architecture.md` §3.4/§7. `backend/api/main.py`'s chat endpoint
   calls `troubleshooting_graph.astream(..., stream_mode=["messages",
@@ -314,8 +320,9 @@ public by construction).
   `react-markdown`; user messages stay plain text.
 - **Prompts** are versioned files under `backend/prompts/` — one per
   graph node (`intake_v2.md` (live; `intake_v1.md` retired),
-  `plan_v1.md`, `diagnose_v1.md`, `recommend_v1.md`, plus
-  `eval_judge_v1.md` for the eval harness's LLM judge; `chat_v1-3.md` are
+  `plan_v1.md`, `diagnose_v1.md`, `recommend_v2.md` (live; v1 retired —
+  v2 cites only the docs `ground` retrieved), plus `eval_judge_v2.md` for
+  the eval harness's LLM judge; `chat_v1-3.md` are
   the retired Week 1-3 single-prompt versions, kept for history) — loaded
   by name via `prompts.load_prompt()`. Add a new version file rather than
   editing one in place when a prompt changes behavior you want to compare

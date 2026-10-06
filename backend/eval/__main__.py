@@ -37,6 +37,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="skip the LLM judge and score on the deterministic signal check alone",
     )
     parser.add_argument(
+        "--no-rag",
+        action="store_true",
+        help="A/B baseline: no docs retrieval for `recommend` and no docs tool for the planner",
+    )
+    parser.add_argument(
         "--keep",
         action="store_true",
         help="leave scenario namespaces in place after the run, for manual inspection",
@@ -60,6 +65,7 @@ async def main_async(args: argparse.Namespace) -> int:
         print("Scoring: deterministic signal check + LLM judge.")
     else:
         print("Scoring: deterministic signal check only (--no-judge).")
+    print(f"Docs retrieval: {'off (--no-rag)' if args.no_rag else 'on'}.")
 
     records = []
     for index, scenario in enumerate(scenarios, start=1):
@@ -67,6 +73,7 @@ async def main_async(args: argparse.Namespace) -> int:
         record = await run_scenario(
             scenario,
             use_judge=not args.no_judge,
+            rag=not args.no_rag,
             keep_namespace=args.keep,
             setup_timeout=args.setup_timeout,
         )

@@ -30,6 +30,9 @@ class Summary:
     clarification_requests: int
     namespace_fills: int
     judge_fallbacks: int
+    cited: int
+    invalid_citations: int
+    grounding_errors: int
     failed_scoring: int
 
     @property
@@ -106,6 +109,9 @@ def summarize(records: list[RunRecord]) -> Summary:
         clarification_requests=sum(1 for r in scored if r.clarification_requested),
         namespace_fills=sum(r.namespace_fills for r in scored),
         judge_fallbacks=sum(1 for r in scored if r.score and r.score.judge_error),
+        cited=sum(1 for r in scored if r.cited_urls),
+        invalid_citations=sum(len(r.invalid_citations) for r in scored),
+        grounding_errors=sum(1 for r in scored if r.grounding_error),
         failed_scoring=sum(1 for r in records if r.status == "scoring_failed"),
     )
 
@@ -185,6 +191,11 @@ def print_report(records: list[RunRecord], summary: Summary, results_path: Path)
         f"ended at intake {summary.clarification_requests}x; "
         f"namespace omitted by planner {summary.namespace_fills}x"
     )
+    print(
+        f"recommendations citing docs {summary.cited}/{summary.scored}; "
+        f"citations not in corpus {summary.invalid_citations}; "
+        f"docs retrieval failed {summary.grounding_errors}x"
+    )
     if summary.judge_fallbacks:
         print(f"judge failed {summary.judge_fallbacks}x; those verdicts fell back to the signal check")
     if summary.failed_setup or summary.failed_agent or summary.failed_scoring:
@@ -219,6 +230,10 @@ def _failure_detail(record: RunRecord) -> str:
             notes.append(f"judge passed but signal check missed: {missing}")
         if record.expected_tools_missed:
             notes.append(f"expected-but-unused tools: {', '.join(record.expected_tools_missed)}")
+    if record.invalid_citations:
+        notes.append(f"cited URL(s) not in corpus: {', '.join(record.invalid_citations)}")
+    if record.grounding_error:
+        notes.append(f"docs retrieval failed: {record.grounding_error.splitlines()[0]}")
     if score.signal_check.forbidden_hits:
         notes.append(f"forbidden terms present (advisory): {', '.join(score.signal_check.forbidden_hits)}")
     return " | ".join(notes)

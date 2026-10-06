@@ -10,16 +10,27 @@ import asyncio
 import json
 
 from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.runnables import RunnableConfig
 
-from graph.state import LOOP_GUARD_MAX, AgentState, Diagnosis, Scope, ToolCallRecord
+from graph.state import LOOP_GUARD_MAX, AgentState, Diagnosis, ReferenceDoc, Scope, ToolCallRecord
 from models.config import ModelTier, get_chat_model
 from prompts import load_prompt
-from rag import search_k8s_docs_tool
+from rag import search_docs, search_k8s_docs_tool
 from tools import TOOLS, get_pod_status, get_recent_events
 from tools.errors import describe_tool_error
 
 ALL_TOOLS = [*TOOLS, search_k8s_docs_tool]
 TOOLS_BY_NAME = {t.name: t for t in ALL_TOOLS}
+
+# Distinct doc pages handed to `recommend`. Retrieval returns chunks, and
+# several can come from one page, so more chunks are fetched than this.
+GROUNDING_DOCS = 3
+_GROUNDING_CHUNKS = 8
+
+
+def _rag_enabled(config: RunnableConfig | None) -> bool:
+    """Docs retrieval on unless the caller opts out (`eval --no-rag` A/B)."""
+    return (config or {}).get("configurable", {}).get("rag", True)
 
 
 def _investigation_summary(state: AgentState) -> str:
@@ -82,11 +93,12 @@ async def gather_context(state: AgentState) -> dict:
     }
 
 
-async def plan(state: AgentState) -> dict:
+async def plan(state: AgentState, config: RunnableConfig) -> dict:
     if state.step_count >= LOOP_GUARD_MAX:
         return {"loop_guard_triggered": True, "pending_tool_call": None}
 
-    model = get_chat_model(ModelTier.REASONING).bind_tools(ALL_TOOLS)
+    tools = ALL_TOOLS if _rag_enabled(config) else TOOLS
+    model = get_chat_model(ModelTier.REASONING).bind_tools(tools)
     messages = [
         SystemMessage(content=load_prompt("plan_v1")),
         *state.messages,
@@ -165,13 +177,58 @@ async def diagnose(state: AgentState) -> dict:
     return {"diagnosis": diagnosis}
 
 
+async def ground(state: AgentState, config: RunnableConfig) -> dict:
+    """Retrieve docs for the diagnosed cause, for `recommend` to cite.
+
+    Deterministic, like `gather_context`: the planner almost never chose to
+    search the docs (eval measured zero calls), because the evidence alone
+    settles the diagnosis. Where docs earn their place is the fix, so they
+    are fetched here for every diagnosis rather than left to a model's
+    choice. A failed search is recorded and the run continues without docs.
+    """
+    root_cause = state.diagnosis.root_cause if state.diagnosis else ""
+    if not _rag_enabled(config) or not root_cause.strip():
+        return {"reference_docs": []}
+    try:
+        chunks = await asyncio.to_thread(search_docs, root_cause, _GROUNDING_CHUNKS)
+    except Exception as exc:
+        return {"reference_docs": [], "grounding_error": f"{type(exc).__name__}: {exc}"}
+
+    # One excerpt per page (the best-scoring chunk), so three citations can
+    # point at three different pages.
+    docs: dict[str, ReferenceDoc] = {}
+    for chunk in chunks:
+        url = chunk.get("source_url")
+        if url and url not in docs:
+            docs[url] = ReferenceDoc(
+                title=chunk.get("title") or url,
+                source_url=url,
+                content=chunk["content"],
+                score=chunk["score"],
+            )
+        if len(docs) == GROUNDING_DOCS:
+            break
+    return {"reference_docs": list(docs.values())}
+
+
+def _reference_docs_section(docs: list[ReferenceDoc]) -> str:
+    if not docs:
+        return "Reference documentation: none retrieved. Cite no documentation."
+    entries = [f"[{i}] {d.title} — {d.source_url}\n{d.content}" for i, d in enumerate(docs, start=1)]
+    return "Reference documentation (the only sources you may cite):\n\n" + "\n\n".join(entries)
+
+
 async def recommend(state: AgentState) -> dict:
     model = get_chat_model(ModelTier.REASONING)
     messages = [
-        SystemMessage(content=load_prompt("recommend_v1")),
+        SystemMessage(content=load_prompt("recommend_v2")),
         *state.messages,
         HumanMessage(
-            content=f"{_investigation_summary(state)}\n\nDiagnosis: {state.diagnosis.model_dump_json() if state.diagnosis else '{}'}"
+            content=(
+                f"{_investigation_summary(state)}\n\n"
+                f"Diagnosis: {state.diagnosis.model_dump_json() if state.diagnosis else '{}'}\n\n"
+                f"{_reference_docs_section(state.reference_docs)}"
+            )
         ),
     ]
     response = await model.ainvoke(messages)

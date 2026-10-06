@@ -39,7 +39,7 @@ def _truthy(value: str | None) -> bool:
     return (value or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
-def run_config(scenario_id: str, namespace: str) -> dict:
+def run_config(scenario_id: str, namespace: str, rag: bool = True) -> dict:
     """Per-run LangChain config: names and tags the trace by scenario.
 
     Harmless when tracing is off — it is just metadata on the invocation —
@@ -47,6 +47,7 @@ def run_config(scenario_id: str, namespace: str) -> dict:
     """
     return {
         "run_name": f"eval:{scenario_id}",
-        "tags": ["eval", f"scenario:{scenario_id}"],
-        "metadata": {"scenario_id": scenario_id, "namespace": namespace},
+        "tags": ["eval", f"scenario:{scenario_id}", "rag" if rag else "no-rag"],
+        "metadata": {"scenario_id": scenario_id, "namespace": namespace, "rag": rag},
+        "configurable": {"rag": rag},
     }

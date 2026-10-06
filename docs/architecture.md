@@ -86,7 +86,7 @@ class AgentState(BaseModel):
 ```
 intake → gather_context → plan
 plan ──(need more evidence)──▶ execute_tool ──▶ plan     # bounded loop
-plan ──(enough evidence)─────▶ diagnose ──▶ recommend ──▶ END
+plan ──(enough evidence)─────▶ diagnose ──▶ ground ──▶ recommend ──▶ END
 ```
 
 | Node | Type | Responsibility |
@@ -96,7 +96,8 @@ plan ──(enough evidence)─────▶ diagnose ──▶ recommend ─�
 | `plan` | LLM, reasoning tier | Decide: call a specific tool for more evidence, or diagnose now. Emits a structured decision. |
 | `execute_tool` | deterministic | Run the chosen read-only tool, append normalized result to `investigation_log`. |
 | `diagnose` | LLM, reasoning tier | Synthesize root cause, confidence level, cite supporting evidence. |
-| `recommend` | LLM, reasoning tier | Produce the suggested fix as text, explicitly framed as human-run. |
+| `ground` | deterministic | Retrieve doc pages for the diagnosed root cause (§8), for `recommend` to cite. |
+| `recommend` | LLM, reasoning tier | Produce the suggested fix as text, explicitly framed as human-run, citing retrieved docs where they support it. |
 
 ### Loop guard
 
@@ -117,6 +118,13 @@ later.
   Chunked and embedded into Qdrant.
 - **Retrieval is a tool**, callable by the `plan` node (e.g. "look up what
   readiness probe failures mean") — not always-on retrieval every turn.
+- **Revised after eval (Week 5):** the planner made zero docs searches in
+  every eval run. The live evidence settles the diagnosis, and the public
+  K8s docs largely restate what the model already knows. So retrieval also
+  runs once, deterministically, in a `ground` node after `diagnose`,
+  keyed on the diagnosed root cause, and `recommend` cites what comes
+  back. That puts retrieval where this section always said its value
+  was: grounding the fix, not finding the cause.
 - **Role:** grounds the `diagnose`/`recommend` output in canonical docs so
   recommendations cite real flags/fields instead of hallucinating them. RAG
   does not do the diagnosis; the reasoning-tier model does, using tool

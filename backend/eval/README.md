@@ -119,6 +119,50 @@ event by filtering events to the pod. What does fail:
   "judge failed Nx". A scoring exception is now `scoring_failed`, not
   `agent_failed`. Re-scored, that diagnosis was correct.
 
+## RAG: what eval showed it is (and isn't) for
+
+**Finding.** In every saved eval run before 2026-10-06 (14 local runs
+from August plus three full-suite runs on 2026-10-05, the last at 19/21
+correct), the planner called `search_k8s_docs` **zero times**. Two causes:
+
+- The evidence settles the diagnosis. Every scenario is solved from
+  cluster state, and the planner is told to stop once the evidence is
+  clear, which is before docs would add anything.
+- The corpus overlaps with the model's knowledge. Official Kubernetes
+  docs are heavily represented in training data; looking up what
+  CrashLoopBackOff means returns what the model already knows. RAG pays
+  off on knowledge the model can't have (post-cutoff changes, internal
+  runbooks), and a public-docs corpus has little of that.
+
+So RAG doesn't improve diagnosis here, and the suite can't claim it does.
+
+**What it does now.** `docs/architecture.md` §8 always said RAG's job was
+grounding the *fix*. Retrieval now runs deterministically in a `ground`
+node after `diagnose` (query: the diagnosed root cause), and
+`recommend_v2` cites what comes back, only where a page supports a
+specific part of the fix. Since `ground` runs after `diagnose`, it can't
+change diagnosis accuracy by construction.
+
+**Measured (2026-10-06, 17 of 21 scenarios; 4 lost to an API billing
+error, not the agent):**
+
+| | Before (`recommend_v1`, no docs) | After (`ground` + `recommend_v2`) |
+|---|---|---|
+| Remediation appropriate | 19/21 | 16/17 (only `needle`, which fails on diagnosis) |
+| Recommendations citing a doc | 0 | 17/17 (1-3 pages each) |
+| Citations not in the corpus (made up) | n/a | 0 of 35 |
+| Citations from the pages actually retrieved | n/a | 35/35 |
+| Docs retrieval failures | n/a | 0 |
+
+The model is selective: it cites 1 of the 3 retrieved pages for
+`readiness` and `noisy`, not everything it's given. One known gap: the
+validity check confirms a URL is a real corpus page, not that the link
+text describes it. In a smoke run, `selector` labelled the Debug Pods URL
+"Kubernetes service debugging guide". Checking that would need the judge.
+
+`--no-rag` turns off both `ground` and the planner's docs tool, for a
+same-prompt comparison.
+
 ## Running it
 
 Needs a reachable Kind cluster and `kubectl` on PATH.
