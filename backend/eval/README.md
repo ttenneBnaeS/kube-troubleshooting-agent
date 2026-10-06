@@ -107,6 +107,18 @@ event by filtering events to the pod. What does fail:
   results from misleading the planner, not that it alone decides the
   outcome.
 
+- **Judge output failed validation (2026-10-05).** The judge used
+  `with_structured_output`'s default `function_calling` method, which
+  forces a tool call and validates afterwards. In 2 of 20 calls the model
+  leaked tool-call markup (`</parameter></invoke>`) into a string field.
+  Once that swallowed the `reasoning` field, `JudgeVerdict` raised, and
+  `networkpolicy` went unscored, reported as an *agent* error. The judge
+  now uses `method="json_schema"` (constrained decoding via
+  `output_config.format`, so the schema is guaranteed), retries once on a
+  malformed verdict, then falls back to the signal check and reports
+  "judge failed Nx". A scoring exception is now `scoring_failed`, not
+  `agent_failed`. Re-scored, that diagnosis was correct.
+
 ## Running it
 
 Needs a reachable Kind cluster and `kubectl` on PATH.
@@ -165,7 +177,7 @@ Two scorers run on every scenario:
   Matching is word-boundary aware, so "payments" doesn't match inside
   "payments-api". Reproducible and free, and it names *which* part of the
   expected answer was missing.
-- **LLM judge** (reasoning tier, `prompts/eval_judge_v1.md`) — compares
+- **LLM judge** (reasoning tier, `prompts/eval_judge_v2.md`) — compares
   the diagnosis to the ground truth and owns the verdict, because keyword
   matching can't tell a paraphrase from a miss.
 

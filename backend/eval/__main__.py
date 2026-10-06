@@ -72,8 +72,8 @@ async def main_async(args: argparse.Namespace) -> int:
         )
         if record.status == "setup_failed":
             print(f"  setup failed: {record.error}")
-        elif record.status == "agent_failed":
-            print(f"  agent failed: {record.error.splitlines()[0]}")
+        elif record.status in ("agent_failed", "scoring_failed"):
+            print(f"  {record.status.replace('_', ' ')}: {record.error.splitlines()[0]}")
         else:
             mark = "correct" if record.correct else "incorrect"
             print(f"  {mark} — {record.planner_tool_calls} planner tool call(s) in {record.duration_seconds:.0f}s")

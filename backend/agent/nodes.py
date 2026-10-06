@@ -34,7 +34,7 @@ def _investigation_summary(state: AgentState) -> str:
 
 
 async def intake(state: AgentState) -> dict:
-    model = get_chat_model(ModelTier.FAST).with_structured_output(Scope)
+    model = get_chat_model(ModelTier.FAST).with_structured_output(Scope, method="json_schema")
     messages = [
         SystemMessage(content=load_prompt("intake_v2")),
         *state.messages,
@@ -148,7 +148,7 @@ async def execute_tool(state: AgentState) -> dict:
 
 
 async def diagnose(state: AgentState) -> dict:
-    model = get_chat_model(ModelTier.REASONING).with_structured_output(Diagnosis)
+    model = get_chat_model(ModelTier.REASONING).with_structured_output(Diagnosis, method="json_schema")
     guard_note = (
         "\n\nNote: the investigation hit its step cap before the planner "
         "found enough evidence on its own. Diagnose from what's been "

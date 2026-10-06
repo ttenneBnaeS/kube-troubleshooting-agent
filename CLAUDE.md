@@ -261,8 +261,18 @@ public by construction).
   emits a thinking block. Hence every field on `Diagnosis` and
   `Scope` carries a default (`confidence` defaults to `"low"`, so an
   omission never reads as certainty). Don't make a structured-output
-  field required, and read model text via `.text`, never `.content`
-  (`api/main.py`'s streaming path included).
+  field required *in Python*, and read model text via `.text`, never
+  `.content` (`api/main.py`'s streaming path included). Structured
+  output goes through `with_structured_output(..., method="json_schema")`
+  (constrained decoding), never the default `function_calling`: that
+  forces a tool call (which Sonnet 5.5 / Opus 5.5 reject) and once leaked
+  tool-call markup that dropped a field. `STRUCTURED_OUTPUT_CONFIG` in
+  `graph/state.py` marks every field required in the *schema sent to the
+  model*, so the model must fill them; the Python defaults stay as the
+  backstop. Put developer notes on these models in comments, not
+  docstrings, since the docstring becomes the schema description the
+  model sees. The eval judge (`JudgeVerdict`) deliberately has no
+  defaults: it retries once, then falls back to the signal check.
 - **Failed tool calls are evidence, not accidents.** `execute_tool`
   catches exceptions from a tool call, normalizes them via
   `tools/errors.py`, and appends the result to the investigation log

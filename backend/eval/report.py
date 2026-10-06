@@ -29,6 +29,8 @@ class Summary:
     disagreements: int
     clarification_requests: int
     namespace_fills: int
+    judge_fallbacks: int
+    failed_scoring: int
 
     @property
     def accuracy(self) -> float:
@@ -103,6 +105,8 @@ def summarize(records: list[RunRecord]) -> Summary:
         disagreements=sum(1 for r in scored if r.score and not r.score.scorers_agree),
         clarification_requests=sum(1 for r in scored if r.clarification_requested),
         namespace_fills=sum(r.namespace_fills for r in scored),
+        judge_fallbacks=sum(1 for r in scored if r.score and r.score.judge_error),
+        failed_scoring=sum(1 for r in records if r.status == "scoring_failed"),
     )
 
 
@@ -130,6 +134,8 @@ def _status_mark(record: RunRecord) -> str:
         return "SETUP"
     if record.status == "agent_failed":
         return "ERROR"
+    if record.status == "scoring_failed":
+        return "UNSCORED"
     if record.clarification_requested:
         return "ASKED"
     return "PASS" if record.correct else "FAIL"
@@ -179,8 +185,13 @@ def print_report(records: list[RunRecord], summary: Summary, results_path: Path)
         f"ended at intake {summary.clarification_requests}x; "
         f"namespace omitted by planner {summary.namespace_fills}x"
     )
-    if summary.failed_setup or summary.failed_agent:
-        print(f"not scored: {summary.failed_setup} setup failure(s), {summary.failed_agent} agent error(s)")
+    if summary.judge_fallbacks:
+        print(f"judge failed {summary.judge_fallbacks}x; those verdicts fell back to the signal check")
+    if summary.failed_setup or summary.failed_agent or summary.failed_scoring:
+        print(
+            f"not scored: {summary.failed_setup} setup failure(s), {summary.failed_agent} agent error(s), "
+            f"{summary.failed_scoring} scoring error(s)"
+        )
     print(f"full records: {results_path}")
 
 

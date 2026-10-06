@@ -48,7 +48,7 @@ class RunRecord:
     scenario_id: str
     namespace: str
     user_request: str
-    status: str  # "scored" | "setup_failed" | "agent_failed"
+    status: str  # "scored" | "setup_failed" | "agent_failed" | "scoring_failed"
     difficulty: str = "medium"
     duration_seconds: float = 0.0
 
@@ -140,7 +140,8 @@ async def run_scenario(
             use_judge=use_judge,
         )
     except Exception as exc:
-        record.status = "agent_failed"
+        # The agent finished; only grading broke. Don't count it against the agent.
+        record.status = "scoring_failed"
         record.error = f"scoring failed: {type(exc).__name__}: {exc}"
     finally:
         if not keep_namespace:

@@ -5,6 +5,8 @@ typed state threaded through the graph, fact-gathering nodes producing
 normalized structured data, and judgment nodes (LLM) reasoning over it.
 """
 
+from typing import Literal
+
 from langchain_core.messages import BaseMessage
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -14,7 +16,27 @@ from pydantic import BaseModel, ConfigDict, Field
 LOOP_GUARD_MAX = 8
 
 
+def _require_every_field(schema: dict) -> None:
+    """Mark every property required in the schema sent to the model.
+
+    Structured-output models keep Python defaults as a backstop (see
+    `Diagnosis`), but a defaulted field is optional in the generated JSON
+    schema, so constrained decoding (`method="json_schema"`) would let the
+    model skip it. Requiring every field there makes the model fill each
+    one, while the defaults still cover a response that somehow lacks one.
+    """
+    schema["required"] = list(schema.get("properties", {}))
+
+
+# Applied to every model passed to `with_structured_output`.
+STRUCTURED_OUTPUT_CONFIG = ConfigDict(json_schema_extra=_require_every_field)
+
+
 class Scope(BaseModel):
+    """The resource the user is asking about, or a clarifying question if it can't be resolved."""
+
+    model_config = STRUCTURED_OUTPUT_CONFIG
+
     namespace: str | None = None
     resource_type: str | None = None
     resource_name: str | None = None
@@ -36,21 +58,27 @@ class ToolCallRecord(BaseModel):
     namespace_filled: bool = False
 
 
+# Structured output from the `diagnose` node. (A comment, not a docstring:
+# a docstring becomes the schema description sent to the model.)
+#
+# Every field has a Python default on purpose. A missing field on a
+# required model raises `ValidationError` *inside the graph*, killing a
+# run that had already gathered all the evidence it needed, at the last
+# step. Defaulting is strictly better than crashing: a diagnosis that
+# arrives without a stated confidence is still a diagnosis, and
+# `confidence` defaults to "low" rather than "high" so an omission can
+# never read as certainty. Constrained decoding plus
+# `STRUCTURED_OUTPUT_CONFIG` should make omissions impossible; the
+# defaults stay as the backstop.
 class Diagnosis(BaseModel):
-    """Structured output from the `diagnose` node.
+    """Root-cause diagnosis of the investigated failure."""
 
-    Every field has a default on purpose. `with_structured_output` does
-    not guarantee the model fills each one, and a missing field on a
-    required schema raises `ValidationError` *inside the graph* — killing
-    a run that had already gathered all the evidence it needed, at the
-    last step. Defaulting is strictly better than crashing: a diagnosis
-    that arrives without a stated confidence is still a diagnosis, and
-    `confidence` defaults to "low" rather than "high" so an omission can
-    never read as certainty.
-    """
+    model_config = STRUCTURED_OUTPUT_CONFIG
 
     root_cause: str = Field(default="", description="The underlying cause, not the symptom.")
-    confidence: str = Field(default="low", description='One of "high", "medium", or "low".')
+    confidence: Literal["high", "medium", "low"] = Field(
+        default="low", description="How strongly the gathered evidence supports the root cause."
+    )
     citations: list[str] = Field(
         default_factory=list, description="Specific evidence from the investigation supporting the root cause."
     )

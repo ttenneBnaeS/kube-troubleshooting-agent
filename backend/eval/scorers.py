@@ -18,7 +18,7 @@ the disagreement is recorded per scenario rather than smoothed over.
 import re
 from dataclasses import asdict, dataclass, field
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from models.config import ModelTier, get_chat_model
 from prompts import load_prompt
@@ -30,6 +30,8 @@ JUDGE_PROMPT = "eval_judge_v2"
 
 class JudgeVerdict(BaseModel):
     """Structured output from the LLM judge."""
+
+    # No defaults here, so every field is already required in the schema.
 
     root_cause_correct: bool = Field(description="Did the agent identify the same underlying cause as the ground truth?")
     remediation_appropriate: bool = Field(description="Would acting on the agent's recommendation actually fix it?")
@@ -59,6 +61,9 @@ class DiagnosisScore:
     correct: bool
     remediation_appropriate: bool
     scorers_agree: bool
+    # Set when the judge was asked but never produced a usable verdict, so
+    # the verdict above fell back to the signal check.
+    judge_error: str | None = None
 
     def to_dict(self) -> dict:
         return {
@@ -67,6 +72,7 @@ class DiagnosisScore:
             "scorers_agree": self.scorers_agree,
             "signal_check": self.signal_check.to_dict(),
             "judge": self.judge.model_dump() if self.judge else None,
+            "judge_error": self.judge_error,
         }
 
 
@@ -107,7 +113,12 @@ async def judge_diagnosis(
     diagnosis_text: str,
     recommendation_text: str,
 ) -> JudgeVerdict:
-    model = get_chat_model(ModelTier.REASONING).with_structured_output(JudgeVerdict)
+    # `json_schema` constrains decoding to the schema (`output_config.format`)
+    # rather than forcing a tool call and validating afterwards. Under the
+    # default `function_calling` method the model occasionally leaked
+    # tool-call markup (`</parameter></invoke>`) into a string field,
+    # swallowing the next field and failing validation.
+    model = get_chat_model(ModelTier.REASONING).with_structured_output(JudgeVerdict, method="json_schema")
     payload = "\n\n".join(
         [
             # Flagged explicitly rather than left for the judge to infer from
@@ -140,16 +151,18 @@ async def score_diagnosis(
 
     produced_output = bool(diagnosis_text.strip() or recommendation_text.strip())
     verdict = None
+    judge_error = None
     if use_judge and produced_output:
-        verdict = await judge_diagnosis(golden, diagnosis_text, recommendation_text)
+        verdict, judge_error = await _judge_with_retry(golden, diagnosis_text, recommendation_text)
 
     if verdict is not None:
         correct = verdict.root_cause_correct
         remediation_ok = verdict.remediation_appropriate
     else:
-        # No judge (disabled, or the agent produced nothing): fall back to
-        # the deterministic check so a run without an API budget still
-        # yields a number.
+        # No judge (disabled, the agent produced nothing, or the judge
+        # failed twice): fall back to the deterministic check so the
+        # scenario still yields a number rather than dropping out of the
+        # denominator.
         correct = signal_check.passed and produced_output
         remediation_ok = correct
 
@@ -159,4 +172,26 @@ async def score_diagnosis(
         correct=correct,
         remediation_appropriate=remediation_ok,
         scorers_agree=signal_check.passed == correct,
+        judge_error=judge_error,
     )
+
+
+async def _judge_with_retry(
+    golden: GoldenLabel,
+    diagnosis_text: str,
+    recommendation_text: str,
+    attempts: int = 2,
+) -> tuple[JudgeVerdict | None, str | None]:
+    """One retry on a malformed verdict, then give up rather than raise.
+
+    No defaults on `JudgeVerdict` (unlike `Diagnosis`): a defaulted
+    `root_cause_correct` would record a verdict the judge never gave.
+    API errors are left to the SDK's own retries and propagate.
+    """
+    error = None
+    for _ in range(attempts):
+        try:
+            return await judge_diagnosis(golden, diagnosis_text, recommendation_text), None
+        except ValidationError as exc:
+            error = f"ValidationError: {exc.error_count()} error(s), first: {exc.errors()[0]['loc']} {exc.errors()[0]['msg']}"
+    return None, error
