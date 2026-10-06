@@ -143,15 +143,16 @@ node after `diagnose` (query: the diagnosed root cause), and
 specific part of the fix. Since `ground` runs after `diagnose`, it can't
 change diagnosis accuracy by construction.
 
-**Measured (2026-10-06, 17 of 21 scenarios; 4 lost to an API billing
-error, not the agent):**
+**Measured (2026-10-06, all 21 scenarios; 17 in one run, plus 4 re-run
+after an API billing error interrupted them):**
 
 | | Before (`recommend_v1`, no docs) | After (`ground` + `recommend_v2`) |
 |---|---|---|
-| Remediation appropriate | 19/21 | 16/17 (only `needle`, which fails on diagnosis) |
-| Recommendations citing a doc | 0 | 17/17 (1-3 pages each) |
-| Citations not in the corpus (made up) | n/a | 0 of 35 |
-| Citations from the pages actually retrieved | n/a | 35/35 |
+| Diagnosis correct | 19/21 | 19/21 (`logtail`, `needle`, as before) |
+| Remediation appropriate | 19/21 | 19/21 |
+| Recommendations citing a doc | 0 | 21/21 (1-3 pages each) |
+| Citations not in the corpus (made up) | n/a | 0 of 41 |
+| Citations from the pages actually retrieved | n/a | 41/41 |
 | Docs retrieval failures | n/a | 0 |
 
 The model is selective: it cites 1 of the 3 retrieved pages for
