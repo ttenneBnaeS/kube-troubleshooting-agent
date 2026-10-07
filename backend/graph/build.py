@@ -5,8 +5,12 @@ described in docs/architecture.md §7.
     plan --(need more evidence)--> execute_tool --> plan   # bounded loop
     plan --(enough evidence)-----> diagnose -> ground -> recommend -> finalize -> END
 
-`intake` can also short-circuit straight to `finalize` when the request is
-too ambiguous to investigate (see `graph.state.Scope.needs_clarification`).
+`intake` can also skip the investigation: to `answer_followup` when an
+earlier turn's evidence already answers the request, or straight to
+`finalize` when it's too ambiguous to investigate (see `graph.state.Scope`).
+
+    intake --(follow-up)------> answer_followup -> finalize
+    intake --(clarify)--------> finalize
 `finalize` archives the turn into conversation state, which a checkpointer
 persists across turns under the caller's `thread_id`.
 """
@@ -15,6 +19,7 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph import END, StateGraph
 
 from agent.nodes import (
+    answer_followup,
     diagnose,
     execute_tool,
     finalize,
@@ -41,11 +46,14 @@ def build_graph(checkpointer: BaseCheckpointSaver | None = None):
     graph.add_node("diagnose", diagnose)
     graph.add_node("ground", ground)
     graph.add_node("recommend", recommend)
+    graph.add_node("answer_followup", answer_followup)
     graph.add_node("finalize", finalize)
 
     graph.set_entry_point("intake")
     graph.add_conditional_edges(
-        "intake", route_after_intake, {"gather_context": "gather_context", "finalize": "finalize"}
+        "intake",
+        route_after_intake,
+        {"gather_context": "gather_context", "answer_followup": "answer_followup", "finalize": "finalize"},
     )
     graph.add_edge("gather_context", "plan")
     graph.add_conditional_edges("plan", route_after_plan, {"execute_tool": "execute_tool", "diagnose": "diagnose"})
@@ -53,6 +61,7 @@ def build_graph(checkpointer: BaseCheckpointSaver | None = None):
     graph.add_edge("diagnose", "ground")
     graph.add_edge("ground", "recommend")
     graph.add_edge("recommend", "finalize")
+    graph.add_edge("answer_followup", "finalize")
     graph.add_edge("finalize", END)
 
     return graph.compile(checkpointer=checkpointer)

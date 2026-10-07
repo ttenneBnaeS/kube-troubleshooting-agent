@@ -13,6 +13,10 @@ from api.schemas import ChatRequest
 from graph import build_graph, new_turn_input
 from graph.state import DEFAULT_CLARIFYING_QUESTION, checkpoint_serializer
 
+# Nodes whose LLM output is user-facing prose, streamed token by token.
+# Every other LLM node returns structured output with nothing to stream.
+PROSE_NODES = frozenset({"recommend", "answer_followup"})
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -57,13 +61,11 @@ async def chat(req: ChatRequest) -> EventSourceResponse:
     async def event_stream():
         try:
             final_state = None
-            streamed_recommendation = False
-            # The graph's `recommend` node is the only one whose LLM call
-            # produces user-facing prose; "messages" mode surfaces its
-            # tokens as they're generated, "values" mode gives us the full
-            # state after each node so we can fall back to a clarifying
-            # question if `intake` short-circuited the graph before
-            # `recommend` ever ran (docs/architecture.md §7).
+            streamed_reply = False
+            # "messages" mode surfaces the prose nodes' tokens as they're
+            # generated; "values" mode gives the full state after each
+            # node, so a turn that streamed nothing (`intake` asked a
+            # clarifying question) can send the reply `finalize` recorded.
             async for stream_mode, chunk in graph.astream(
                 new_turn_input(req.message), config=config, stream_mode=["messages", "values"]
             ):
@@ -71,16 +73,16 @@ async def chat(req: ChatRequest) -> EventSourceResponse:
                     message, metadata = chunk
                     # `.text` drops thinking blocks; `.content` would be a
                     # list of blocks whenever the model thinks first.
-                    if metadata.get("langgraph_node") == "recommend" and message.text:
-                        streamed_recommendation = True
+                    if metadata.get("langgraph_node") in PROSE_NODES and message.text:
+                        streamed_reply = True
                         yield {"event": "token", "data": message.text}
                 elif stream_mode == "values":
                     final_state = chunk
 
-            if not streamed_recommendation:
-                scope = _field(final_state, "scope")
-                question = _field(scope, "clarifying_question") if scope else None
-                yield {"event": "token", "data": question or DEFAULT_CLARIFYING_QUESTION}
+            if not streamed_reply:
+                turns = _field(final_state, "turns") or []
+                reply = _field(turns[-1], "reply") if turns else None
+                yield {"event": "token", "data": reply or DEFAULT_CLARIFYING_QUESTION}
         except Exception as exc:
             yield {"event": "error", "data": str(exc)}
             return

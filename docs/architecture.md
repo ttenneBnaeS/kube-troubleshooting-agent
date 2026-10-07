@@ -94,6 +94,7 @@ intake → gather_context → plan
 plan ──(need more evidence)──▶ execute_tool ──▶ plan     # bounded loop
 plan ──(enough evidence)─────▶ diagnose ──▶ ground ──▶ recommend ──▶ finalize ──▶ END
 intake ──(needs clarification)──▶ finalize
+intake ──(follow-up, earlier evidence exists)──▶ answer_followup ──▶ finalize
 ```
 
 | Node | Type | Responsibility |
@@ -105,6 +106,7 @@ intake ──(needs clarification)──▶ finalize
 | `diagnose` | LLM, reasoning tier | Synthesize root cause, confidence level, cite supporting evidence. |
 | `ground` | deterministic | Retrieve doc pages for the diagnosed root cause (§8), for `recommend` to cite. |
 | `recommend` | LLM, reasoning tier | Produce the suggested fix as text, explicitly framed as human-run, citing retrieved docs where they support it. |
+| `answer_followup` | LLM, reasoning tier | Answer a follow-up from earlier turns' archived evidence, no tools; say so when that evidence doesn't contain the answer. |
 | `finalize` | deterministic | Archive the turn: append the Human/AI messages and a `TurnRecord` to conversation state. |
 
 ### Loop guard
@@ -123,7 +125,11 @@ later.
 As built: `AsyncSqliteSaver` in the API, one thread per client-generated
 `thread_id`; the client sends only the new message. SQLite over the
 in-memory saver so threads survive a server restart at the cost of one
-file; Postgres would be overkill for a single-process demo.
+file; Postgres would be overkill for a single-process demo. Follow-ups
+are routed by `intake` (`Scope.is_followup`): a question answerable from
+earlier turns' evidence goes to `answer_followup`; one about current
+cluster state re-investigates. The route requires an earlier
+investigation to exist, enforced in code.
 
 ## 8. RAG
 
@@ -235,9 +241,8 @@ were otherwise unsolvable by construction rather than merely hard:
 anywhere) and configmap/secret support in `describe_resource` (a
 wrong-key diagnosis depends on which keys the object really has).
 
-Week 6 so far: checkpointed conversational memory (§7). Not yet built:
-follow-up routing that answers from prior turns without re-investigating,
-the investigation-trail UI (Week 6),
+Week 6 so far: checkpointed conversational memory and follow-up routing
+(§7). Not yet built: the investigation-trail UI (Week 6),
 tests and Dockerization (Week 7), and the MCP server (Week 8). The
 RBAC-scoped read-only credentials called for in §5 remain open —
 enforcement today is code-layer only.

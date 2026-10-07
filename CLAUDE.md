@@ -36,8 +36,9 @@ built specifically to make the agent fail (see `backend/eval/README.md`,
 "Scenarios built to fail").
 
 Week 6 is in progress: conversational memory is a LangGraph checkpointer
-(SQLite, keyed by a client-generated `thread_id`) — done; follow-up
-routing (answering from prior turns without re-investigating), thread
+(SQLite, keyed by a client-generated `thread_id`) and follow-up routing
+(`intake` → `answer_followup`, answering from prior turns' evidence
+without re-investigating) are done; multi-turn eval cases, thread
 rehydration on page reload, and the investigation-trail UI are not yet.
 `tests/` and `demo/` are empty placeholders. Week 7 is
 tests/Docker/structured logging, Week 8 the MCP server.
@@ -228,7 +229,8 @@ public by construction).
   stream token-by-token to the frontend (the only node whose output is
   meant to read as prose); `"values"` chunks track the final state so the
   endpoint can fall back to `scope.clarifying_question` when `intake`
-  ended the run early. Don't stream any other node's output — `diagnose`
+  ended the run early. `answer_followup` streams the same way
+  (`PROSE_NODES` in `api/main.py`). Don't stream any other node's output — `diagnose`
   and `intake` use `with_structured_output`, which forces tool-calling
   under the hood and has no user-facing text to stream.
 - **Conversation memory** (`graph/state.py`): `AgentState` is split into
@@ -250,6 +252,17 @@ public by construction).
   Both use `checkpoint_serializer()`, a strict msgpack allowlist of our
   state models — **a new Pydantic model nested in state must be added
   there**, or loading a thread containing it fails.
+- **Follow-ups**: `intake` sets `Scope.is_followup` when the new message
+  is answerable from earlier turns' archived evidence (`TurnRecord`s);
+  `route_after_intake` then sends it to `answer_followup` (reasoning
+  tier, no tools, last `FOLLOWUP_TURNS` investigations as context)
+  instead of `gather_context`. The route is honoured only if an earlier
+  turn actually investigated — a guard in code, not the prompt, so a
+  misclassified first turn can't skip the investigation and answer from
+  nothing. Questions about *current* state ("is it fixed now?", "what
+  about the other pod?") must still investigate; `intake_v3` says so.
+  Each `TurnRecord` carries its `route` (`investigate`/`followup`/
+  `clarify`) and the `reply` shown.
 - **Tool catalog** (`backend/tools/`): plain functions
   (`pods.py`/`events.py`/`logs.py`/`nodes.py`/`services.py`/`describe.py`/`policies.py`)
   against the official `kubernetes` Python client — chosen over shelling
@@ -339,7 +352,8 @@ public by construction).
   content instead of erroring. Assistant messages render through
   `react-markdown`; user messages stay plain text.
 - **Prompts** are versioned files under `backend/prompts/` — one per
-  graph node (`intake_v2.md` (live; `intake_v1.md` retired),
+  graph node (`intake_v3.md` (live; adds the follow-up decision — v1/v2
+  retired), `followup_v1.md`,
   `plan_v1.md`, `diagnose_v1.md`, `recommend_v2.md` (live; v1 retired —
   v2 cites only the docs `ground` retrieved), plus `eval_judge_v2.md` for
   the eval harness's LLM judge; `chat_v1-3.md` are

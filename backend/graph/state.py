@@ -49,6 +49,10 @@ class Scope(BaseModel):
     # question as the response instead of guessing.
     needs_clarification: bool = False
     clarifying_question: str | None = None
+    # Set when the request can be answered from an earlier turn's evidence
+    # without re-investigating. Only honoured when an earlier turn actually
+    # investigated — `route_after_intake` enforces that, not the prompt.
+    is_followup: bool = False
 
 
 class ToolCallRecord(BaseModel):
@@ -96,6 +100,9 @@ class ReferenceDoc(BaseModel):
     score: float
 
 
+TurnRoute = Literal["investigate", "followup", "clarify"]
+
+
 class TurnRecord(BaseModel):
     """One finished conversation turn, archived by `finalize`.
 
@@ -104,6 +111,10 @@ class TurnRecord(BaseModel):
     """
 
     user_request: str
+    route: TurnRoute = "investigate"
+    # What the user was shown: the recommendation, the follow-up answer,
+    # or the clarifying question.
+    reply: str = ""
     scope: Scope | None = None
     investigation_log: list[ToolCallRecord] = []
     diagnosis: Diagnosis | None = None
@@ -146,6 +157,9 @@ class AgentState(BaseModel):
     reference_docs: list[ReferenceDoc] = []
     grounding_error: str | None = None
     recommendation: str | None = None
+    # Set by `answer_followup` instead of the investigation path's
+    # `recommendation`, on a turn answered from earlier evidence.
+    followup_answer: str | None = None
 
     step_count: int = 0
     loop_guard_triggered: bool = False

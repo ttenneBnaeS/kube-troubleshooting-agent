@@ -3,7 +3,8 @@
 See docs/architecture.md §7 for the responsibility of each node. Fact
 gathering (`gather_context`, `execute_tool`) is plain Python against the
 existing tool catalog; judgment (`intake`, `plan`, `diagnose`,
-`recommend`) is LLM-driven, tier-routed through `models.config`.
+`recommend`, `answer_followup`) is LLM-driven, tier-routed through
+`models.config`.
 `finalize` is the only node that writes conversation state.
 """
 
@@ -22,6 +23,7 @@ from graph.state import (
     Scope,
     ToolCallRecord,
     TurnRecord,
+    TurnRoute,
 )
 from models.config import ModelTier, get_chat_model
 from prompts import load_prompt
@@ -54,19 +56,49 @@ def _investigation_summary(state: AgentState) -> str:
     return "\n\n".join(parts)
 
 
+# Earlier investigations handed to `answer_followup`, newest last. Each
+# carries its full tool output, so the whole conversation would grow
+# without bound; the most recent few are what a follow-up is about.
+FOLLOWUP_TURNS = 3
+
+
+def _investigated_turns(state: AgentState) -> list[TurnRecord]:
+    return [t for t in state.turns if t.route == "investigate" and t.investigation_log]
+
+
+def _prior_findings(turns: list[TurnRecord]) -> str:
+    """One line per earlier investigation, so `intake` knows what evidence exists."""
+    if not turns:
+        return "Earlier investigations in this conversation: none."
+    lines = []
+    for t in turns:
+        tools = ", ".join(r.tool_name for r in t.investigation_log)
+        cause = t.diagnosis.root_cause if t.diagnosis else "no diagnosis"
+        lines.append(f"- {t.user_request!r} (scope {t.scope.model_dump_json() if t.scope else '{}'}): "
+                     f"tools run: {tools}; diagnosis: {cause}")
+    return "Earlier investigations in this conversation:\n" + "\n".join(lines)
+
+
 async def intake(state: AgentState) -> dict:
     model = get_chat_model(ModelTier.FAST).with_structured_output(Scope, method="json_schema")
     messages = [
-        SystemMessage(content=load_prompt("intake_v2")),
+        SystemMessage(content=load_prompt("intake_v3")),
         *state.messages,
-        HumanMessage(content=state.user_request),
+        HumanMessage(content=f"{_prior_findings(_investigated_turns(state))}\n\nNew message: {state.user_request}"),
     ]
     scope = await model.ainvoke(messages)
     return {"scope": scope}
 
 
 def route_after_intake(state: AgentState) -> str:
-    if state.scope and state.scope.needs_clarification:
+    scope = state.scope
+    # Answering from earlier evidence beats both a clarifying question and
+    # a re-run, but only if there *is* earlier evidence: on a first turn a
+    # misclassified follow-up would otherwise skip the investigation and
+    # answer from nothing.
+    if scope and scope.is_followup and _investigated_turns(state):
+        return "answer_followup"
+    if scope and scope.needs_clarification:
         return "finalize"
     return "gather_context"
 
@@ -249,8 +281,43 @@ async def recommend(state: AgentState) -> dict:
     return {"recommendation": response.text}
 
 
+def _turn_evidence(turn: TurnRecord) -> str:
+    parts = [f"Request: {turn.user_request}", f"Scope: {turn.scope.model_dump_json() if turn.scope else '{}'}"]
+    for record in turn.investigation_log:
+        parts.append(f"Tool `{record.tool_name}` called with {record.args} -> {record.result}")
+    parts.append(f"Diagnosis: {turn.diagnosis.model_dump_json() if turn.diagnosis else '{}'}")
+    if turn.reference_docs:
+        parts.append(_reference_docs_section(turn.reference_docs))
+    return "\n\n".join(parts)
+
+
+async def answer_followup(state: AgentState) -> dict:
+    model = get_chat_model(ModelTier.REASONING)
+    turns = _investigated_turns(state)[-FOLLOWUP_TURNS:]
+    evidence = "\n\n---\n\n".join(
+        f"Earlier investigation {i}:\n\n{_turn_evidence(t)}" for i, t in enumerate(turns, start=1)
+    )
+    messages = [
+        SystemMessage(content=load_prompt("followup_v1")),
+        *state.messages,
+        HumanMessage(content=f"{evidence}\n\n---\n\nFollow-up question: {state.user_request}"),
+    ]
+    response = await model.ainvoke(messages)
+    return {"followup_answer": response.text}
+
+
+def _turn_route(state: AgentState) -> TurnRoute:
+    if state.followup_answer is not None:
+        return "followup"
+    if state.recommendation is not None:
+        return "investigate"
+    return "clarify"
+
+
 def _reply_text(state: AgentState) -> str:
-    """What the user was shown this turn: the recommendation, or intake's question."""
+    """What the user was shown this turn."""
+    if state.followup_answer is not None:
+        return state.followup_answer
     if state.recommendation is not None:
         return state.recommendation
     question = state.scope.clarifying_question if state.scope else None
@@ -261,8 +328,11 @@ async def finalize(state: AgentState) -> dict:
     # Every turn ends here, including one `intake` ended early with a
     # clarifying question: recording that question in `messages` is what
     # lets the user's answer to it make sense on the next turn.
+    reply = _reply_text(state)
     turn = TurnRecord(
         user_request=state.user_request,
+        route=_turn_route(state),
+        reply=reply,
         scope=state.scope,
         investigation_log=state.investigation_log,
         diagnosis=state.diagnosis,
@@ -271,6 +341,6 @@ async def finalize(state: AgentState) -> dict:
         loop_guard_triggered=state.loop_guard_triggered,
     )
     return {
-        "messages": [HumanMessage(content=state.user_request), AIMessage(content=_reply_text(state))],
+        "messages": [HumanMessage(content=state.user_request), AIMessage(content=reply)],
         "turns": [turn],
     }
