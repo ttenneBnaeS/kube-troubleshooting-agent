@@ -3,6 +3,8 @@
 import { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 
+import { createSSEParser } from "@/lib/sse";
+
 import { Trail, type TrailStep } from "./trail";
 
 type Message = {
@@ -58,32 +60,15 @@ async function streamChat(
 
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
-  let buffer = "";
+  const parse = createSSEParser();
 
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;
-    // SSE line endings may be CRLF; normalize before framing on blank lines.
-    buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, "\n");
-
-    const events = buffer.split("\n\n");
-    buffer = events.pop() ?? "";
-
-    for (const rawEvent of events) {
-      const lines = rawEvent.split("\n");
-      const eventName = lines
-        .find((l) => l.startsWith("event:"))
-        ?.slice("event:".length)
-        .trim();
-      // A single SSE event can carry multiple "data:" lines (embedded
-      // newlines in the value) that must be rejoined, not just the first.
-      const data = lines
-        .filter((l) => l.startsWith("data:"))
-        .map((l) => l.slice("data:".length).replace(/^ /, ""))
-        .join("\n");
-      if (eventName === "token" && data) onToken(data);
-      if (eventName === "step" && data) onStep(JSON.parse(data) as TrailStep);
-      if (eventName === "error") throw new Error(data || "stream error");
+    for (const { event, data } of parse(decoder.decode(value, { stream: true }))) {
+      if (event === "token" && data) onToken(data);
+      if (event === "step" && data) onStep(JSON.parse(data) as TrailStep);
+      if (event === "error") throw new Error(data || "stream error");
     }
   }
 }

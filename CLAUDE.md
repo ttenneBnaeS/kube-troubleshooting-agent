@@ -60,8 +60,21 @@ uv run uvicorn api.main:app --reload --port 8000
 ```
 
 - Add a dependency: `uv add <package>` (run from `backend/`)
-- No test suite or linter is configured yet for the backend (Week 7). The
-  eval harness below is the closest thing to a regression check.
+- Tests: `uv run pytest` (~1s). They cover the deterministic layer only —
+  no cluster, no model calls, no network: tool normalization against real
+  `kubernetes.client` model objects served by `tests/builders.py`'s
+  `FakeCoreV1`, the read-only boundary (`test_read_only.py` statically
+  scans `tools/` for any non-`list_`/`read_`/`get_` client call — editing
+  that test is the only way a mutating call lands), state reset and
+  checkpoint serialization, routing, the trail, eval scoring, and the API
+  over the real compiled graph with model/cluster nodes stubbed
+  (`stub_nodes` in `conftest.py`). Agent *quality* is the eval harness's
+  job, not pytest's.
+- Lint: `uv run ruff check .` (`--fix` for import order). `E501` is off
+  on purpose: tool docstrings are the model-facing descriptions, kept on
+  one line so wrapping can't change them. No formatter is enforced.
+- Tests live in `backend/tests/`, not the root `tests/` the plan sketches,
+  for the same reason as `eval/` (below).
 
 ### Eval harness (`backend/eval/`)
 
@@ -187,6 +200,7 @@ npm run dev          # dev server, http://localhost:3000
 npm run build         # production build
 npm run lint          # eslint
 npx tsc --noEmit       # typecheck
+npm test              # node:test unit tests (src/**/*.test.ts), no extra deps
 ```
 
 **`frontend/AGENTS.md` matters**: this Next.js version has breaking
@@ -371,7 +385,10 @@ public by construction).
   `data:` lines — the parser normalizes `\r\n`→`\n` before framing on
   blank lines and joins every `data:` line per event; don't reintroduce a
   bare `\n\n` split or a first-`data:`-line-only read, both silently drop
-  content instead of erroring. Assistant messages render through
+  content instead of erroring. The parser lives in `src/lib/sse.ts` with
+  tests beside it; it normalizes CRLF across the whole buffer, because
+  per-chunk normalization left a stray `\r` on a token whenever a `\r\n`
+  split across network chunks. Assistant messages render through
   `react-markdown`; user messages stay plain text.
 - **Prompts** are versioned files under `backend/prompts/` — one per
   graph node (`intake_v3.md` (live; adds the follow-up decision — v1/v2

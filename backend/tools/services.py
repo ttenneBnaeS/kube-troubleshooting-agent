@@ -1,4 +1,3 @@
-from kubernetes import client as k8s
 
 from .client import get_core_v1_api
 from .config import settings

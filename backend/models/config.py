@@ -5,13 +5,13 @@ planning/diagnosis nodes, and a fast/cheap tier for narrow classification
 steps. Node functions ask for a tier, never hardcode a model id.
 """
 
-from enum import Enum
+from enum import StrEnum
 
 from langchain_anthropic import ChatAnthropic
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-class ModelTier(str, Enum):
+class ModelTier(StrEnum):
     REASONING = "reasoning"
     FAST = "fast"
 

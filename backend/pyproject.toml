@@ -21,3 +21,34 @@ dependencies = [
     "sse-starlette>=3.4.8",
     "uvicorn[standard]>=0.52.3",
 ]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+    "ruff>=0.16.10",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Backend modules are top-level packages (`graph`, `tools`, ...), not
+# under a `backend` prefix, so tests import them from this directory.
+pythonpath = [".", "tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+addopts = "--import-mode=importlib"
+filterwarnings = [
+    # Upstream: starlette's TestClient nudging toward httpx2; not ours to fix.
+    "ignore:Using `httpx` with `starlette.testclient` is deprecated",
+]
+
+[tool.ruff]
+line-length = 120
+target-version = "py313"
+extend-exclude = ["eval/results"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM", "RUF"]
+# Tool docstrings are the descriptions the model reads, kept on one line
+# so wrapping can't change them; scenario data is long string literals.
+ignore = ["E501"]
