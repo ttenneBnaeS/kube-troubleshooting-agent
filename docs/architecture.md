@@ -224,7 +224,6 @@ infra/
   kubernetes/   # scenario manifests live here too
 docs/
   architecture.md
-demo/
 ```
 
 `eval/` sits under `backend/` rather than at the repo root as originally

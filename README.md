@@ -246,8 +246,8 @@ papered over with a scenario rigged to need RAG
 - **An explicit "go check" can be answered from memory.** If earlier
   evidence already covers it, a request to check again is routed as a
   follow-up and answered from that evidence (correctly, but without the
-  re-check the user asked for). It's visible in the
-  [demo walkthrough](demo/README.md) rather than scripted around.
+  re-check the user asked for). It's left visible rather than scripted
+  around.
 
 ## Repository
 
@@ -270,7 +270,6 @@ infra/
   docker/         Dockerfiles, compose stack
 docs/
   architecture.md
-demo/             walkthrough script + a Playwright recorder that drives the real UI
 ```
 
 Built with LangGraph, LangChain (model wrapper and RAG plumbing only),

@@ -10,7 +10,8 @@ to run rather than applying them. It's a portfolio project targeting AI
 Engineer roles — the point is demoable fluency with the current agentic
 stack, not the Kubernetes domain knowledge itself. Full design lives in
 `docs/architecture.md`; the phased build-out is in
-`Kubernetes_Troubleshooting_Agent_Plan_v2.md` (8-week roadmap).
+`Kubernetes_Troubleshooting_Agent_Plan_v2.md` (8-week roadmap; local only,
+gitignored and removed from history, so it may not exist in a fresh clone).
 
 **Read `docs/architecture.md` before making any structural change** — it
 records decisions (LangChain/LangGraph split, model tier routing, tool
@@ -43,9 +44,9 @@ cases; and the UI shows each answer's investigation trail.
 Week 7 is done: pytest + ruff (backend), `node:test` (frontend),
 structured logging, API tracing, and Docker/Compose (`infra/docker/`).
 Basic auth was skipped deliberately — the plan lists public deployment
-under "cut first" and a local demo is the target. `demo/` is still an
-empty placeholder. Week 8 is done: the MCP server (`backend/mcp_server/`), the README
-rewrite (its Results table is from eval run F, 2026-10-06), and `demo/`:
+under "cut first" and a local demo is the target. Week 8 is done: the MCP server (`backend/mcp_server/`), the README
+rewrite (its Results table is from eval run F, 2026-10-06), and `demo/`
+(local only, gitignored):
 a walkthrough script plus `record.mjs`, which drives the real UI with
 Playwright, records video to `demo/out/` (gitignored), and refreshes
 `docs/images/trail.png`. The walkthrough describes what recordings
