@@ -74,15 +74,16 @@ class ConsoleFormatter(logging.Formatter):
         return line
 
 
-def configure_logging(settings: LogSettings | None = None) -> None:
+def configure_logging(settings: LogSettings | None = None, stream=None) -> None:
     """Route the root logger, and uvicorn's, through one structured handler.
 
     Called at API import. Uvicorn configures its own loggers before it
     imports the app, so they're re-pointed here rather than left printing
-    in a second, unstructured format.
+    in a second, unstructured format. `stream` defaults to stdout; the MCP
+    server passes stderr, because over stdio, stdout *is* the protocol.
     """
     settings = settings or LogSettings()
-    handler = logging.StreamHandler(sys.stdout)
+    handler = logging.StreamHandler(stream or sys.stdout)
     handler.setFormatter(JsonFormatter() if settings.format == "json" else ConsoleFormatter())
 
     root = logging.getLogger()

@@ -44,7 +44,8 @@ Week 7 is done: pytest + ruff (backend), `node:test` (frontend),
 structured logging, API tracing, and Docker/Compose (`infra/docker/`).
 Basic auth was skipped deliberately — the plan lists public deployment
 under "cut first" and a local demo is the target. `demo/` is still an
-empty placeholder. Week 8 is the MCP server, README, and demo.
+empty placeholder. Week 8: the MCP server (`backend/mcp_server/`) is done; README and demo
+remain.
 
 Note the layout deviation: the plan and `docs/architecture.md` §10 sketch
 `eval/` at the repo root, but it lives at `backend/eval/` because backend
@@ -183,6 +184,28 @@ kube-contexts itself there automatically. Override via `KUBE_NAMESPACE`
 / `KUBE_CONTEXT` / `KUBE_KUBECONFIG_PATH` in `backend/.env` if needed
 (see `.env.example`); unset works fine against a single-context Kind
 cluster.
+
+### MCP server (`backend/mcp_server/`)
+
+```bash
+claude mcp add kube-troubleshooter -- uv run --directory "$PWD/backend" python -m mcp_server
+```
+
+One tool, `investigate(request, namespace?)`, which runs the whole graph
+and returns a structured `Investigation` (diagnosis + confidence +
+evidence, the fix, and the same trail steps the UI shows). It exposes
+the *agent*, not the seven raw tools, on purpose: raw read-only cluster
+tools are what every Kubernetes MCP server already offers; the measured
+investigation is what this project adds (see `server.py`'s docstring).
+Each call is a fresh thread — the client assistant keeps its own
+conversation, and the returned trail lets it answer follow-ups without a
+re-run. Per-node progress goes out via `ctx.report_progress`, since a run
+takes 20-60s. Gotchas: **logging must go to stderr** (`__main__.py`) —
+over stdio, stdout is the protocol, and one log line there breaks it;
+and `--directory backend` matters, since config reads `.env` relative to
+the working directory. Tracing goes to `LANGSMITH_PROJECT`, tagged `mcp`.
+This is MCP SDK 2.x: `MCPServer` (FastMCP was renamed), `mcp_types`,
+and an in-process `mcp.Client(server)` for tests.
 
 ### Docker (`infra/docker/`)
 
