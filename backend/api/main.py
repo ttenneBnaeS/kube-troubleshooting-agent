@@ -1,4 +1,6 @@
 import json
+import time
+import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -20,6 +22,10 @@ from graph.state import (
     TurnRecord,
     checkpoint_serializer,
 )
+from observability import bind, configure_logging, get_logger
+
+configure_logging()
+log = get_logger(__name__)
 
 # Nodes whose LLM output is user-facing prose, streamed token by token.
 # Every other LLM node returns structured output with nothing to stream.
@@ -34,6 +40,7 @@ async def lifespan(app: FastAPI):
     async with aiosqlite.connect(settings.checkpoint_db_path) as conn:
         checkpointer = AsyncSqliteSaver(conn, serde=checkpoint_serializer())
         app.state.graph = build_graph(checkpointer)
+        log.info("api.started", extra={"checkpoint_db": settings.checkpoint_db_path})
         yield
 
 
@@ -107,39 +114,74 @@ async def chat(req: ChatRequest) -> EventSourceResponse:
     config = {"configurable": {"thread_id": req.thread_id}}
 
     async def event_stream():
-        try:
-            final_state = None
-            streamed_reply = False
-            # "messages" mode surfaces the prose nodes' tokens as they're
-            # generated; "updates" mode gives each node's output as it
-            # finishes, which becomes the investigation trail (`event:
-            # step`, JSON); "values" mode gives the full state after each
-            # node, so a turn that streamed nothing (`intake` asked a
-            # clarifying question) can send the reply `finalize` recorded.
-            async for stream_mode, chunk in graph.astream(
-                new_turn_input(req.message), config=config, stream_mode=["messages", "updates", "values"]
-            ):
-                if stream_mode == "messages":
-                    message, metadata = chunk
-                    # `.text` drops thinking blocks; `.content` would be a
-                    # list of blocks whenever the model thinks first.
-                    if metadata.get("langgraph_node") in PROSE_NODES and message.text:
-                        streamed_reply = True
-                        yield {"event": "token", "data": message.text}
-                elif stream_mode == "updates":
-                    for node, update in chunk.items():
-                        for step in _steps_for_update(node, update):
-                            yield {"event": "step", "data": json.dumps(step)}
-                elif stream_mode == "values":
-                    final_state = chunk
-
-            if not streamed_reply:
-                turns = _field(final_state, "turns") or []
-                reply = _field(turns[-1], "reply") if turns else None
-                yield {"event": "token", "data": reply or DEFAULT_CLARIFYING_QUESTION}
-        except Exception as exc:
-            yield {"event": "error", "data": str(exc)}
-            return
-        yield {"event": "done", "data": ""}
+        # Bound inside the generator: it runs in the response task, so a
+        # context set in the endpoint body wouldn't reach the graph's logs.
+        with bind(request_id=uuid.uuid4().hex[:12], thread_id=req.thread_id):
+            async for event in _turn_events(graph, req, config):
+                yield event
 
     return EventSourceResponse(event_stream())
+
+
+async def _turn_events(graph, req: ChatRequest, config: dict):
+    started = last_node_at = time.monotonic()
+    log.info("chat.turn.start", extra={"message_chars": len(req.message)})
+    try:
+        final_state = None
+        streamed_reply = False
+        # "messages" mode surfaces the prose nodes' tokens as they're
+        # generated; "updates" mode gives each node's output as it
+        # finishes, which becomes the investigation trail (`event:
+        # step`, JSON); "values" mode gives the full state after each
+        # node, so a turn that streamed nothing (`intake` asked a
+        # clarifying question) can send the reply `finalize` recorded.
+        async for stream_mode, chunk in graph.astream(
+            new_turn_input(req.message), config=config, stream_mode=["messages", "updates", "values"]
+        ):
+            if stream_mode == "messages":
+                message, metadata = chunk
+                # `.text` drops thinking blocks; `.content` would be a
+                # list of blocks whenever the model thinks first.
+                if metadata.get("langgraph_node") in PROSE_NODES and message.text:
+                    streamed_reply = True
+                    yield {"event": "token", "data": message.text}
+            elif stream_mode == "updates":
+                now = time.monotonic()
+                for node, update in chunk.items():
+                    # The graph runs one node at a time, so the gap
+                    # since the previous update is this node's runtime.
+                    log.debug("graph.node", extra={"node": node, "duration_ms": round((now - last_node_at) * 1000)})
+                    for step in _steps_for_update(node, update):
+                        yield {"event": "step", "data": json.dumps(step)}
+                last_node_at = now
+            elif stream_mode == "values":
+                final_state = chunk
+
+        if not streamed_reply:
+            turns = _field(final_state, "turns") or []
+            reply = _field(turns[-1], "reply") if turns else None
+            yield {"event": "token", "data": reply or DEFAULT_CLARIFYING_QUESTION}
+    except Exception as exc:
+        # Previously this reached only the client, as an SSE error event,
+        # and left no trace server-side.
+        log.exception("chat.turn.failed", extra={"duration_ms": round((time.monotonic() - started) * 1000)})
+        yield {"event": "error", "data": str(exc)}
+        return
+    _log_turn_end(final_state, started)
+    yield {"event": "done", "data": ""}
+
+
+def _log_turn_end(final_state, started: float) -> None:
+    turns = _field(final_state, "turns") or []
+    turn = TurnRecord.model_validate(turns[-1]) if turns else None
+    log.info(
+        "chat.turn.end",
+        extra={
+            "route": turn.route if turn else None,
+            "duration_ms": round((time.monotonic() - started) * 1000),
+            "tool_calls": sum(1 for r in turn.investigation_log if r.tool_name != trail.INITIAL_SWEEP) if turn else 0,
+            "confidence": turn.diagnosis.confidence if turn and turn.diagnosis else None,
+            "loop_guard": bool(turn and turn.loop_guard_triggered),
+            "reply_chars": len(turn.reply) if turn else 0,
+        },
+    )

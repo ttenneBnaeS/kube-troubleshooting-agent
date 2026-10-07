@@ -290,6 +290,19 @@ public by construction).
   about the other pod?") must still investigate; `intake_v3` says so.
   Each `TurnRecord` carries its `route` (`investigate`/`followup`/
   `clarify`) and the `reply` shown.
+- **Logging** (`backend/observability/`): stdlib `logging` with a JSON
+  (`LOG_FORMAT=json`) or `key=value` console formatter — same fields
+  either way. Log an *event name* plus fields via `extra=` (e.g.
+  `log.info("tool.call", extra={...})`), never prose with values baked
+  in. `bind(request_id=..., thread_id=...)` attaches context to every
+  record in a chat turn, graph nodes included; it's entered inside the
+  SSE generator because that runs in the response task. **Don't use a
+  `LogRecord` attribute name as an `extra` key** (`args`, `name`,
+  `msg`, `module`, ...): `logging` raises `KeyError`, and inside a node
+  that's a crash — `tool.call` logs `tool_args` for exactly this reason,
+  after the test suite caught it. User-written text is never logged, only
+  its length; `sse_starlette` is held at WARNING because its DEBUG output
+  is every response chunk, i.e. the reply text.
 - **Tool catalog** (`backend/tools/`): plain functions
   (`pods.py`/`events.py`/`logs.py`/`nodes.py`/`services.py`/`describe.py`/`policies.py`)
   against the official `kubernetes` Python client — chosen over shelling

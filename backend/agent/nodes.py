@@ -10,6 +10,7 @@ existing tool catalog; judgment (`intake`, `plan`, `diagnose`,
 
 import asyncio
 import json
+import time
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
@@ -26,10 +27,13 @@ from graph.state import (
     TurnRoute,
 )
 from models.config import ModelTier, get_chat_model
+from observability import get_logger
 from prompts import load_prompt
 from rag import search_docs, search_k8s_docs_tool
 from tools import TOOLS, get_pod_status, get_recent_events
 from tools.errors import describe_tool_error
+
+log = get_logger(__name__)
 
 ALL_TOOLS = [*TOOLS, search_k8s_docs_tool]
 TOOLS_BY_NAME = {t.name: t for t in ALL_TOOLS}
@@ -114,7 +118,9 @@ async def _sweep(fn, **kwargs):
     try:
         results = await asyncio.to_thread(fn, **kwargs)
     except Exception as exc:
-        return describe_tool_error(exc)
+        error = describe_tool_error(exc)
+        log.warning("sweep.failed", extra={"sweep": fn.__name__, "error": error["error"], **kwargs})
+        return error
     return [r.model_dump() for r in results]
 
 
@@ -181,13 +187,32 @@ async def execute_tool(state: AgentState) -> dict:
     # whole run at the exact moment the answer arrived, so failures are
     # recorded into the investigation log and the planner decides what
     # they mean.
+    started = time.monotonic()
+    error = None
     if tool is None:
-        result = json.dumps({"error": "unknown_tool", "message": f"no tool named {call['name']!r}"})
+        error = "unknown_tool"
+        result = json.dumps({"error": error, "message": f"no tool named {call['name']!r}"})
     else:
         try:
             result = await tool.ainvoke(args)
         except Exception as exc:
-            result = json.dumps(describe_tool_error(exc))
+            fact = describe_tool_error(exc)
+            error = fact["error"]
+            result = json.dumps(fact)
+    log.info(
+        "tool.call",
+        extra={
+            "tool": call["name"],
+            "tool_args": args,
+            "namespace_filled": namespace_filled,
+            "duration_ms": round((time.monotonic() - started) * 1000),
+            "result_chars": len(result),
+            # A tool error is often the evidence (a 404 for a missing
+            # Secret), so it's logged as a field, not at error level.
+            "tool_error": error,
+            "step": state.step_count + 1,
+        },
+    )
 
     # Log the args actually used, so the planner sees which namespace it
     # really queried.
