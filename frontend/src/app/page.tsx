@@ -1,16 +1,50 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 
-type Message = { role: "user" | "assistant"; content: string };
+import { Trail, type TrailStep } from "./trail";
+
+type Message = {
+  role: "user" | "assistant";
+  content: string;
+  trail?: TrailStep[];
+};
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+const THREAD_KEY = "kube-troubleshooter.threadId";
+
+// The thread id is a convenience for picking a conversation back up after
+// a reload; storage can be unavailable (private mode, blocked site data),
+// in which case each page load is simply a new conversation.
+function loadThreadId(): string | null {
+  try {
+    return localStorage.getItem(THREAD_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function saveThreadId(id: string) {
+  try {
+    localStorage.setItem(THREAD_KEY, id);
+  } catch {
+    // Not persisted; the conversation still works for this page load.
+  }
+}
+
+async function fetchThread(threadId: string): Promise<Message[]> {
+  const res = await fetch(`${API_URL}/api/threads/${encodeURIComponent(threadId)}`);
+  if (!res.ok) throw new Error(`thread request failed: ${res.status}`);
+  const body = (await res.json()) as { messages: Message[] };
+  return body.messages;
+}
 
 async function streamChat(
   message: string,
   threadId: string,
   onToken: (text: string) => void,
+  onStep: (step: TrailStep) => void,
 ) {
   // History lives server-side in the agent's checkpointer, keyed by thread.
   const res = await fetch(`${API_URL}/api/chat`, {
@@ -48,6 +82,7 @@ async function streamChat(
         .map((l) => l.slice("data:".length).replace(/^ /, ""))
         .join("\n");
       if (eventName === "token" && data) onToken(data);
+      if (eventName === "step" && data) onStep(JSON.parse(data) as TrailStep);
       if (eventName === "error") throw new Error(data || "stream error");
     }
   }
@@ -57,37 +92,64 @@ export default function Home() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [pending, setPending] = useState(false);
-  // One conversation thread per page load for now; persisting it across
-  // reloads (and a "new conversation" control) comes with thread rehydration.
-  const [threadId] = useState(() => crypto.randomUUID());
+  // Conversation history lives server-side in the agent's checkpointer;
+  // the client only keeps the thread id, so a reload can fetch it back.
+  const threadId = useRef<string | null>(null);
+
+  useEffect(() => {
+    const stored = loadThreadId();
+    if (!stored) {
+      threadId.current = crypto.randomUUID();
+      saveThreadId(threadId.current);
+      return;
+    }
+    threadId.current = stored;
+    fetchThread(stored)
+      // Don't clobber a message the user already sent while this loaded.
+      .then((loaded) => setMessages((prev) => (prev.length ? prev : loaded)))
+      .catch(() => {
+        // Backend down or the thread is gone: start fresh rather than
+        // showing an error before the user has asked anything.
+      });
+  }, []);
+
+  function newConversation() {
+    if (pending) return;
+    threadId.current = crypto.randomUUID();
+    saveThreadId(threadId.current);
+    setMessages([]);
+  }
+
+  function updateLast(fn: (m: Message) => Message) {
+    setMessages((prev) => {
+      const next = [...prev];
+      next[next.length - 1] = fn(next[next.length - 1]);
+      return next;
+    });
+  }
 
   async function send() {
     const text = input.trim();
     if (!text || pending) return;
+    if (!threadId.current) {
+      threadId.current = crypto.randomUUID();
+      saveThreadId(threadId.current);
+    }
 
     const userMsg: Message = { role: "user", content: text };
-    setMessages([...messages, userMsg, { role: "assistant", content: "" }]);
+    setMessages([...messages, userMsg, { role: "assistant", content: "", trail: [] }]);
     setInput("");
     setPending(true);
 
     try {
-      await streamChat(text, threadId, (token) => {
-        setMessages((prev) => {
-          const next = [...prev];
-          const last = next[next.length - 1];
-          next[next.length - 1] = { ...last, content: last.content + token };
-          return next;
-        });
-      });
+      await streamChat(
+        text,
+        threadId.current,
+        (token) => updateLast((m) => ({ ...m, content: m.content + token })),
+        (step) => updateLast((m) => ({ ...m, trail: [...(m.trail ?? []), step] })),
+      );
     } catch (err) {
-      setMessages((prev) => {
-        const next = [...prev];
-        next[next.length - 1] = {
-          role: "assistant",
-          content: `Error: ${(err as Error).message}`,
-        };
-        return next;
-      });
+      updateLast((m) => ({ ...m, content: `Error: ${(err as Error).message}` }));
     } finally {
       setPending(false);
     }
@@ -96,9 +158,19 @@ export default function Home() {
   return (
     <div className="flex min-h-screen flex-col items-center bg-zinc-50 font-sans dark:bg-black">
       <main className="flex w-full max-w-2xl flex-1 flex-col px-4 py-8">
-        <h1 className="mb-6 text-xl font-semibold text-black dark:text-zinc-50">
-          Kubernetes Troubleshooting Agent
-        </h1>
+        <div className="mb-6 flex items-center justify-between gap-4">
+          <h1 className="text-xl font-semibold text-black dark:text-zinc-50">
+            Kubernetes Troubleshooting Agent
+          </h1>
+          <button
+            type="button"
+            className="shrink-0 rounded-full border border-zinc-300 px-3 py-1 text-xs text-zinc-700 disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-300"
+            onClick={newConversation}
+            disabled={pending || messages.length === 0}
+          >
+            New conversation
+          </button>
+        </div>
 
         <div className="flex flex-1 flex-col gap-4 overflow-y-auto pb-4">
           {messages.length === 0 && (
@@ -118,6 +190,9 @@ export default function Home() {
                   : "min-w-0 max-w-[90%] self-start rounded-2xl bg-zinc-200 px-4 py-2 text-black dark:bg-zinc-800 dark:text-zinc-50"
               }
             >
+              {m.role === "assistant" && m.trail && (
+                <Trail steps={m.trail} pending={pending && i === messages.length - 1} />
+              )}
               {m.content ? (
                 m.role === "assistant" ? (
                   <div

@@ -45,7 +45,7 @@ stops working. So the last seven each target one known limit, and their
 |---|---|---|
 | Reasoning trap | `leading`, `slowstart`, `redherring` | Evidence is reachable, but the obvious reading is wrong. `leading` is an A/B against `networkpolicy` with the user asserting "it's DNS". |
 | Truncated default | `logtail`, `eventflood` | The answer is outside the 100-line log tail or the sweep's 20-newest events. The planner can widen either; does it? |
-| Capability gap | `targetport` | No tool returns the pod spec, so the container's real port is invisible. Measures honesty, not skill. |
+| Capability gap | `targetport` | No tool returns container ports, so the container's real port is invisible. Measures honesty, not skill. Pod `describe` gained `config_references` in Week 6, but ports were left out on purpose to keep this case. |
 | Step budget | `needle` | 16 identical pods, one bad log stream, 8-call loop guard. Expected to fail; the question is whether the diagnosis says what it didn't check. |
 
 **Measured (2026-10-03/04).** Results vary from run to run, so a
@@ -164,6 +164,39 @@ text describes it. In a smoke run, `selector` labelled the Debug Pods URL
 `--no-rag` turns off both `ground` and the planner's docs tool, for a
 same-prompt comparison.
 
+## Multi-turn follow-ups
+
+Week 6 added checkpointed conversation memory, and with it a routing
+decision `intake` can get wrong: answer a follow-up from the evidence
+earlier turns gathered (`answer_followup`, no tools), or investigate
+again. A scenario can carry `follow_ups`, which run on the same thread
+after the first turn, before teardown so a "is it fixed yet?" question
+still sees the broken cluster. Each is scored deterministically on two
+things: whether it took the expected route, and whether the reply
+carries its `required_signals`. Routing right but answering from evidence
+that never had the answer still fails.
+
+| Scenario | Follow-up | Expected route | Why |
+|---|---|---|---|
+| `secret` | "Which key in that Secret was the pod trying to read?" | followup | The answer should already be in turn 1's evidence. |
+| `secret` | "I think I've fixed it now. Is the pod running?" | investigate | Current state; nothing was fixed, so a stale answer is wrong. |
+| `selector` | "…how can I confirm traffic is actually reaching the pods?" | followup | Explanatory; the diagnosis already names empty endpoints. |
+| `distractor` | "What about the report-generator pod?" | investigate | The second real failure; only its logs say why, and turn 1 had no reason to read them. |
+
+**Measured (2026-10-06).** Baseline 3/4, routing 4/4. The miss was the
+first `secret` follow-up: routed correctly, and the reply honestly said
+the evidence didn't name the key. It didn't, because `describe_resource`
+on a pod returned no env references: the Failed event names the missing
+Secret but not the key. That was a tool gap rather than a memory bug.
+Pod describe now returns `config_references` (Secret/ConfigMap names and
+keys, never values). Re-run: 4/4. The fix also stopped turn-1
+recommendations guessing the key (it had suggested `username`/`password`).
+
+The full-suite regression after `intake_v3` (the prompt that adds the
+follow-up decision) scored 18/21 with zero runs ended at intake:
+`logtail` and `needle` as always, plus `targetport`, its known borderline
+case (above).
+
 ## Running it
 
 Needs a reachable Kind cluster and `kubectl` on PATH.
@@ -175,6 +208,7 @@ uv run python -m eval -s dns -s secret # just these
 uv run python -m eval --list           # what's available
 uv run python -m eval --no-judge       # deterministic scoring only, no LLM judge
 uv run python -m eval --keep           # leave namespaces up for inspection
+uv run python -m eval --no-followups   # first turn only
 ```
 
 A full run takes roughly 5-8 minutes: most of it is waiting for scenarios
@@ -202,8 +236,10 @@ Per scenario, sequentially:
    pulling its image.
 3. **Run** the agent graph against a natural-language request that names
    the namespace and the symptom, but never the cause.
-4. **Score** the diagnosis against the golden label (below).
-5. **Tear down** the namespace.
+4. **Follow up**, if the scenario has `follow_ups`: later turns on the
+   same conversation thread (above).
+5. **Score** the diagnosis against the golden label (below).
+6. **Tear down** the namespace.
 
 Runs are sequential on purpose: scenarios contend for node memory (the OOM
 case especially), and the RAG docs tool sits behind Voyage's free-tier

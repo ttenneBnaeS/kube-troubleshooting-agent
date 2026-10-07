@@ -35,11 +35,11 @@ the Week 1-3 bounded probe/execute round-trip in `main.py` is gone.
 built specifically to make the agent fail (see `backend/eval/README.md`,
 "Scenarios built to fail").
 
-Week 6 is in progress: conversational memory is a LangGraph checkpointer
-(SQLite, keyed by a client-generated `thread_id`) and follow-up routing
-(`intake` → `answer_followup`, answering from prior turns' evidence
-without re-investigating) are done; multi-turn eval cases, thread
-rehydration on page reload, and the investigation-trail UI are not yet.
+Week 6 is done: conversational memory is a LangGraph checkpointer
+(SQLite, keyed by a client-generated `thread_id`, rehydrated on page
+reload); follow-ups route to `answer_followup`, which answers from prior
+turns' evidence without re-investigating; eval has multi-turn follow-up
+cases; and the UI shows each answer's investigation trail.
 `tests/` and `demo/` are empty placeholders. Week 7 is
 tests/Docker/structured logging, Week 8 the MCP server.
 
@@ -231,9 +231,21 @@ public by construction).
   meant to read as prose); `"values"` chunks track the final state so the
   endpoint can fall back to `scope.clarifying_question` when `intake`
   ended the run early. `answer_followup` streams the same way
-  (`PROSE_NODES` in `api/main.py`). Don't stream any other node's output — `diagnose`
-  and `intake` use `with_structured_output`, which forces tool-calling
-  under the hood and has no user-facing text to stream.
+  (`PROSE_NODES` in `api/main.py`). Don't stream any other node's *LLM
+  output* — `diagnose` and `intake` use `with_structured_output`, which
+  has no user-facing text to stream. What other nodes did reaches the UI
+  as the **investigation trail** instead: the endpoint also streams in
+  `"updates"` mode and emits one `event: step` (JSON) per sweep, tool
+  call, diagnosis, docs retrieval, or follow-up answer. Steps are built
+  by `api/trail.py` from the same records a `TurnRecord` stores, and
+  `GET /api/threads/{thread_id}` rebuilds the trail from those records
+  on reload — so streamed and reloaded trails can't drift; add a new
+  step type in `trail.py` (and `frontend/src/app/trail.tsx`'s
+  `TrailStep` union), not inline in the endpoint. Tool results are cut
+  to `RESULT_PREVIEW_CHARS` for display only; the model saw all of it.
+  Each `ToolCallRecord` carries the planner's `rationale` (its text
+  alongside the call), which is often empty — the model frequently calls
+  a tool without saying why — and the UI omits it then.
 - **Conversation memory** (`graph/state.py`): `AgentState` is split into
   *conversation* fields (`messages`, `turns` — append-only reducers,
   persisted by the checkpointer, written only by the `finalize` node,
@@ -347,9 +359,13 @@ public by construction).
   compatibility, which is both wasteful and, on Voyage's throttled free
   tier, enough by itself to trigger `RateLimitError` on repeated
   searches.
-- **Frontend → Backend**: `frontend/src/app/page.tsx` calls `POST
+- **Frontend → Backend**: `frontend/src/app/page.tsx` keeps only the
+  conversation's `thread_id` (in `localStorage`, wrapped in try/catch —
+  storage can be unavailable, in which case each load is a new
+  conversation), fetches `GET /api/threads/{id}` on load to rehydrate, and
+  mints a new id for "New conversation". It calls `POST
   /api/chat` and hand-parses the SSE response itself (`event: token` /
-  `event: error` / `event: done`) rather than using `EventSource`, because
+  `event: step` / `event: error` / `event: done`) rather than using `EventSource`, because
   `EventSource` can't send a POST body. `sse-starlette` emits CRLF
   (`\r\n`) line endings and can split one token's text across multiple
   `data:` lines — the parser normalizes `\r\n`→`\n` before framing on

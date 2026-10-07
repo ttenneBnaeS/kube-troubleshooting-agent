@@ -29,7 +29,7 @@ def get_pod_status_tool(namespace: str | None = None, pod_name: str | None = Non
 
 @tool
 def describe_resource_tool(kind: DescribableKind, name: str, namespace: str | None = None) -> str:
-    """Describe a Kubernetes resource: structured status/conditions plus its recent related events. `kind` must be one of: pod, deployment, service, node, configmap, secret. For configmap/secret this returns the key names present (and their value sizes) but never the values themselves — use it to check whether a key a pod references actually exists."""
+    """Describe a Kubernetes resource: structured status/conditions plus its recent related events. `kind` must be one of: pod, deployment, service, node, configmap, secret. For configmap/secret this returns the key names present (and their value sizes) but never the values themselves — use it to check whether a key a pod references actually exists. For a pod it also returns `config_references`: which Secret/ConfigMap names and keys the pod reads via env, envFrom, or volumes."""
     result = describe_resource(kind=kind, name=name, namespace=namespace)
     return json.dumps(result.model_dump())
 

@@ -1,3 +1,4 @@
+import json
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -8,10 +9,18 @@ from fastapi.middleware.cors import CORSMiddleware
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from sse_starlette.sse import EventSourceResponse
 
+from api import trail
 from api.config import settings
 from api.schemas import ChatRequest
 from graph import build_graph, new_turn_input
-from graph.state import DEFAULT_CLARIFYING_QUESTION, checkpoint_serializer
+from graph.state import (
+    DEFAULT_CLARIFYING_QUESTION,
+    Diagnosis,
+    ReferenceDoc,
+    ToolCallRecord,
+    TurnRecord,
+    checkpoint_serializer,
+)
 
 # Nodes whose LLM output is user-facing prose, streamed token by token.
 # Every other LLM node returns structured output with nothing to stream.
@@ -53,6 +62,46 @@ def _field(state, name, default=None):
     return getattr(state, name, default)
 
 
+def _steps_for_update(node: str, update) -> list[dict]:
+    """Trail steps for one node's state update ("updates" stream mode).
+
+    Updates carry model instances or plain dicts depending on the path, so
+    each is re-validated into its model before serializing.
+    """
+    if not update:
+        return []
+    if node in ("gather_context", "execute_tool"):
+        log = _field(update, "investigation_log") or []
+        return [trail.log_step(ToolCallRecord.model_validate(log[-1]))] if log else []
+    if node == "diagnose":
+        diagnosis = _field(update, "diagnosis")
+        return [trail.diagnosis_step(Diagnosis.model_validate(diagnosis))] if diagnosis else []
+    if node == "ground":
+        docs = [ReferenceDoc.model_validate(d) for d in _field(update, "reference_docs") or []]
+        error = _field(update, "grounding_error")
+        return [trail.docs_step(docs, error)] if docs or error else []
+    if node == "answer_followup":
+        return [trail.followup_step()]
+    return []
+
+
+@app.get("/api/threads/{thread_id}")
+async def get_thread(thread_id: str) -> dict:
+    """A thread's turns as chat messages, each assistant reply with its trail.
+
+    Built from the archived `TurnRecord`s rather than `messages`, because
+    that's where each turn's evidence lives. An unknown id is an empty
+    conversation, not an error: the client mints ids before first use.
+    """
+    snapshot = await app.state.graph.aget_state({"configurable": {"thread_id": thread_id}})
+    turns = [TurnRecord.model_validate(t) for t in _field(snapshot.values, "turns") or []]
+    messages = []
+    for turn in turns:
+        messages.append({"role": "user", "content": turn.user_request})
+        messages.append({"role": "assistant", "content": turn.reply, "trail": trail.turn_trail(turn)})
+    return {"thread_id": thread_id, "messages": messages}
+
+
 @app.post("/api/chat")
 async def chat(req: ChatRequest) -> EventSourceResponse:
     graph = app.state.graph
@@ -63,11 +112,13 @@ async def chat(req: ChatRequest) -> EventSourceResponse:
             final_state = None
             streamed_reply = False
             # "messages" mode surfaces the prose nodes' tokens as they're
-            # generated; "values" mode gives the full state after each
+            # generated; "updates" mode gives each node's output as it
+            # finishes, which becomes the investigation trail (`event:
+            # step`, JSON); "values" mode gives the full state after each
             # node, so a turn that streamed nothing (`intake` asked a
             # clarifying question) can send the reply `finalize` recorded.
             async for stream_mode, chunk in graph.astream(
-                new_turn_input(req.message), config=config, stream_mode=["messages", "values"]
+                new_turn_input(req.message), config=config, stream_mode=["messages", "updates", "values"]
             ):
                 if stream_mode == "messages":
                     message, metadata = chunk
@@ -76,6 +127,10 @@ async def chat(req: ChatRequest) -> EventSourceResponse:
                     if metadata.get("langgraph_node") in PROSE_NODES and message.text:
                         streamed_reply = True
                         yield {"event": "token", "data": message.text}
+                elif stream_mode == "updates":
+                    for node, update in chunk.items():
+                        for step in _steps_for_update(node, update):
+                            yield {"event": "step", "data": json.dumps(step)}
                 elif stream_mode == "values":
                     final_state = chunk
 

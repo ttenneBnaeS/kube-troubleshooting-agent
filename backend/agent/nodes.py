@@ -149,7 +149,7 @@ async def plan(state: AgentState, config: RunnableConfig) -> dict:
     response = await model.ainvoke(messages)
     tool_call = response.tool_calls[0] if response.tool_calls else None
     hypothesis = response.text or state.hypothesis
-    return {"hypothesis": hypothesis, "pending_tool_call": tool_call}
+    return {"hypothesis": hypothesis, "pending_tool_call": tool_call, "plan_rationale": response.text}
 
 
 def route_after_plan(state: AgentState) -> str:
@@ -192,7 +192,11 @@ async def execute_tool(state: AgentState) -> dict:
     # Log the args actually used, so the planner sees which namespace it
     # really queried.
     record = ToolCallRecord(
-        tool_name=call["name"], args=args, result=result, namespace_filled=namespace_filled
+        tool_name=call["name"],
+        args=args,
+        result=result,
+        namespace_filled=namespace_filled,
+        rationale=state.plan_rationale,
     )
     return {
         "investigation_log": [*state.investigation_log, record],

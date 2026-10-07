@@ -63,6 +63,9 @@ class ToolCallRecord(BaseModel):
     # planner left it out. Kept so eval can still count how often the
     # model omits it, even though the omission no longer misroutes the call.
     namespace_filled: bool = False
+    # The planner's text alongside the call: why it wanted this evidence.
+    # Shown in the UI's investigation trail.
+    rationale: str = ""
 
 
 # Structured output from the `diagnose` node. (A comment, not a docstring:
@@ -167,6 +170,8 @@ class AgentState(BaseModel):
     # between the two nodes, not part of the architecture doc's state
     # shape, but the loop can't pass a decision otherwise.
     pending_tool_call: dict | None = None
+    # The text `plan` emitted with that call, for `execute_tool` to record.
+    plan_rationale: str = ""
 
 
 CONVERSATION_FIELDS = frozenset({"messages", "turns"})

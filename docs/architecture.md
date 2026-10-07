@@ -181,6 +181,13 @@ decisions worth recording here:
 - **Trust domains.** The harness mutates the cluster (`kubectl
   apply`/`delete`); the agent under test cannot. The read-only boundary in
   §5 constrains the agent, not its test rig.
+- **Multi-turn follow-ups (Week 6).** Memory adds a decision the agent can
+  get wrong: answer from earlier evidence or investigate again. Follow-up
+  turns run on the scenario's thread and are scored deterministically on
+  route and on required reply signals, so a correct route that answers
+  from evidence lacking the answer still fails. The first baseline found a
+  tool gap that way (pod `describe` returned no env references), not a
+  memory bug.
 
 ### Failed tool calls are evidence
 
@@ -224,7 +231,7 @@ same uv environment as the code it tests. The scenario *manifests* stay in
 
 ## 11. Status
 
-As of Week 5: the FastAPI streaming skeleton, the Next.js chat UI, the
+As of Week 6: the FastAPI streaming skeleton, the Next.js chat UI, the
 read-only tool catalog (§4), the RAG pipeline (§8), the LangGraph state
 machine (§6-7), and the eval harness (§9) all exist and are wired
 together. The failure-scenario catalog is at thirteen scenarios, each with a golden
@@ -241,8 +248,11 @@ were otherwise unsolvable by construction rather than merely hard:
 anywhere) and configmap/secret support in `describe_resource` (a
 wrong-key diagnosis depends on which keys the object really has).
 
-Week 6 so far: checkpointed conversational memory and follow-up routing
-(§7). Not yet built: the investigation-trail UI (Week 6),
+Week 6: checkpointed conversational memory and follow-up routing (§7),
+multi-turn eval cases (§9), and the investigation-trail UI: the chat
+endpoint streams one structured step per sweep, tool call, diagnosis and
+docs retrieval alongside the prose, and a reloaded thread rebuilds the
+same trail from its stored turn records. Not yet built:
 tests and Dockerization (Week 7), and the MCP server (Week 8). The
 RBAC-scoped read-only credentials called for in §5 remain open —
 enforcement today is code-layer only.
