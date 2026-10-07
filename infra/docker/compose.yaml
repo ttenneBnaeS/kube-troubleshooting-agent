@@ -1,0 +1,66 @@
+# Full stack against a local Kind cluster. From the repo root:
+#
+#   infra/docker/kubeconfig.sh                                   # once per cluster
+#   docker compose -f infra/docker/compose.yaml up -d --build
+#   docker compose -f infra/docker/compose.yaml run --rm backend python -m rag.index   # once per volume
+#
+# UI on http://localhost:3000, API on http://localhost:8000.
+name: kube-troubleshooter
+
+services:
+  qdrant:
+    image: qdrant/qdrant:v1.19.2
+    volumes:
+      - qdrant:/qdrant/storage
+    # No published ports: only the backend talks to it, so it can't clash
+    # with a dev Qdrant already on 6333.
+
+  backend:
+    build:
+      context: ../../backend
+      dockerfile: ../infra/docker/backend.Dockerfile
+    env_file:
+      # API keys etc. Passed at runtime, never copied into the image.
+      - path: ../../backend/.env
+        required: false
+    environment:
+      RAG_QDRANT_URL: http://qdrant:6333
+      KUBE_KUBECONFIG_PATH: /kube/config
+      API_CHECKPOINT_DB_PATH: /app/data/checkpoints.db
+      LOG_FORMAT: json
+    volumes:
+      - ./kubeconfig:/kube/config:ro
+      - checkpoints:/app/data
+    ports:
+      # Loopback only: the API has no auth and its kubeconfig is
+      # cluster-admin. Binding 127.0.0.1 also means nothing answers on
+      # ::1, so a browser resolving `localhost` to IPv6 falls back to IPv4
+      # instead of hitting Docker's proxy, which (seen on WSL) accepts on
+      # ::1 and then resets the connection.
+      - "127.0.0.1:8000:8000"
+    networks:
+      - default
+      # Kind's network, so the API server resolves by container name.
+      - kind
+    depends_on:
+      - qdrant
+
+  frontend:
+    build:
+      context: ../../frontend
+      dockerfile: ../infra/docker/frontend.Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: http://localhost:8000
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      backend:
+        condition: service_healthy
+
+networks:
+  kind:
+    external: true
+
+volumes:
+  qdrant:
+  checkpoints:

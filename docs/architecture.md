@@ -211,12 +211,13 @@ backend/
   rag/          # corpus loading, embedding, retriever
   prompts/      # versioned prompt templates
   models/       # model config, tier routing
+  observability/  # structured logging, LangSmith tracing setup
   eval/         # scenarios, golden labels, harness, scorers
+  tests/        # pytest, deterministic layer only
 frontend/
 infra/
-  docker/
+  docker/       # Dockerfiles, compose stack, Kind kubeconfig script
   kubernetes/   # scenario manifests live here too
-tests/
 docs/
   architecture.md
 demo/
@@ -227,11 +228,12 @@ sketched: backend modules are top-level (`graph`, `tools`, `models` — no
 `backend` package prefix), so a root-level `eval/` could not import the
 graph without `sys.path` manipulation. Under `backend/` it runs in the
 same uv environment as the code it tests. The scenario *manifests* stay in
-`infra/kubernetes/` as planned.
+`infra/kubernetes/` as planned. `tests/` moved under `backend/` for the
+same reason.
 
 ## 11. Status
 
-As of Week 6: the FastAPI streaming skeleton, the Next.js chat UI, the
+As of Week 7: the FastAPI streaming skeleton, the Next.js chat UI, the
 read-only tool catalog (§4), the RAG pipeline (§8), the LangGraph state
 machine (§6-7), and the eval harness (§9) all exist and are wired
 together. The failure-scenario catalog is at thirteen scenarios, each with a golden
@@ -252,7 +254,13 @@ Week 6: checkpointed conversational memory and follow-up routing (§7),
 multi-turn eval cases (§9), and the investigation-trail UI: the chat
 endpoint streams one structured step per sweep, tool call, diagnosis and
 docs retrieval alongside the prose, and a reloaded thread rebuilds the
-same trail from its stored turn records. Not yet built:
-tests and Dockerization (Week 7), and the MCP server (Week 8). The
+same trail from its stored turn records.
+
+Week 7: a pytest suite over the deterministic layer, including a static
+check that `tools/` only calls read verbs on the Kubernetes client (§5's
+boundary, enforced by test as well as by construction); structured JSON
+logging with per-turn request/thread context; LangSmith tracing for the
+API, separate from eval's project; and Docker images plus a Compose
+stack. Not yet built: the MCP server (Week 8). The
 RBAC-scoped read-only credentials called for in §5 remain open —
 enforcement today is code-layer only.

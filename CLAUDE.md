@@ -19,7 +19,7 @@ locked in up front so they wouldn't get re-litigated mid-build.
 
 ## Current state vs. planned state
 
-The repo is scaffolded for the full 8-week plan; Weeks 1-5 are
+The repo is scaffolded for the full 8-week plan; Weeks 1-7 are
 implemented. `backend/tools/` has a real read-only Kubernetes tool
 catalog (pod status, describe, logs, events, node status, service
 endpoints, network policies) against the official `kubernetes` Python
@@ -40,8 +40,11 @@ Week 6 is done: conversational memory is a LangGraph checkpointer
 reload); follow-ups route to `answer_followup`, which answers from prior
 turns' evidence without re-investigating; eval has multi-turn follow-up
 cases; and the UI shows each answer's investigation trail.
-`tests/` and `demo/` are empty placeholders. Week 7 is
-tests/Docker/structured logging, Week 8 the MCP server.
+Week 7 is done: pytest + ruff (backend), `node:test` (frontend),
+structured logging, API tracing, and Docker/Compose (`infra/docker/`).
+Basic auth was skipped deliberately — the plan lists public deployment
+under "cut first" and a local demo is the target. `demo/` is still an
+empty placeholder. Week 8 is the MCP server, README, and demo.
 
 Note the layout deviation: the plan and `docs/architecture.md` §10 sketch
 `eval/` at the repo root, but it lives at `backend/eval/` because backend
@@ -180,6 +183,38 @@ kube-contexts itself there automatically. Override via `KUBE_NAMESPACE`
 / `KUBE_CONTEXT` / `KUBE_KUBECONFIG_PATH` in `backend/.env` if needed
 (see `.env.example`); unset works fine against a single-context Kind
 cluster.
+
+### Docker (`infra/docker/`)
+
+```bash
+infra/docker/kubeconfig.sh                       # once per Kind cluster
+docker compose -f infra/docker/compose.yaml up -d --build
+docker compose -f infra/docker/compose.yaml run --rm backend python -m rag.index   # once per volume
+docker compose -f infra/docker/compose.yaml down  # volumes (checkpoints, qdrant) survive
+```
+
+Things that were learned the hard way here:
+- The backend reaches Kind by joining its `kind` Docker network with a
+  kubeconfig from `kind get kubeconfig --internal` (server =
+  `kube-troubleshoot-control-plane:6443`). `~/.kube/config` points at
+  `127.0.0.1:<port>`, which inside a container is the container. The
+  generated file is cluster-admin and gitignored.
+- Published ports are bound to `127.0.0.1`, and that's load-bearing:
+  Docker's proxy on WSL accepts connections on `::1` and then resets
+  them, and Chromium resolving `localhost` to IPv6 doesn't fall back, so
+  the UI showed "Failed to fetch" with nothing reaching the API.
+  Loopback-only also keeps the unauthenticated API off the LAN.
+- The app user needs a real home directory: Voyage's client downloads its
+  tokenizer to `~/.cache/huggingface` on first embed, at index time *and*
+  per query, so without one every `ground` retrieval fails (quietly, as
+  `grounding_error`).
+- uv's cache is a BuildKit cache mount in a build stage; baked into a
+  layer it doubled the image. `.env` is excluded via
+  `backend.Dockerfile.dockerignore` and passed with `env_file` at runtime.
+- `NEXT_PUBLIC_API_URL` is a frontend *build arg* — it's inlined into the
+  client bundle, so changing it means rebuilding the image.
+- Compose's Qdrant has its own volume and no published ports, so it
+  never collides with a dev Qdrant on 6333 — but it starts empty; index it.
 
 ### RAG / Qdrant (required for the docs-search tool)
 

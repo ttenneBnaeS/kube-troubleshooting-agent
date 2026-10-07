@@ -36,6 +36,21 @@ throwaway namespace, waits for it to actually break, runs the agent, and
 scores the diagnosis against ground truth — see
 [Evaluating the agent](#evaluating-the-agent).
 
+**Week 6**: conversational memory and the investigation trail.
+Conversations persist server-side in a LangGraph checkpointer (SQLite),
+so a page reload brings them back. Follow-up questions that the earlier
+evidence already answers are answered without touching the cluster;
+questions about current state re-investigate. Each answer shows how it
+was reached: the sweep, every tool call and its result, the diagnosis
+with its confidence, and the docs cited. Eval gained multi-turn cases.
+
+**Week 7**: production hardening. A pytest suite over the deterministic
+layer (including a static check that the tool layer only ever calls
+read verbs on the Kubernetes client), ruff, frontend unit tests,
+structured JSON logging, LangSmith tracing for the API with each
+conversation grouped as a thread, and Docker images plus a Compose
+stack — see [Running with Docker](#running-with-docker).
+
 ## Setup
 
 Beyond the backend/frontend env files below, the tool-calling and RAG
@@ -119,6 +134,20 @@ npm run dev
 ```
 
 Open http://localhost:3000.
+
+## Running with Docker
+
+Backend, frontend, and a Qdrant of its own, against your Kind cluster.
+From the repo root, with `backend/.env` filled in:
+
+```bash
+infra/docker/kubeconfig.sh          # once per cluster: in-network kubeconfig
+docker compose -f infra/docker/compose.yaml up -d --build
+docker compose -f infra/docker/compose.yaml run --rm backend python -m rag.index   # once; ~6 min on Voyage's free tier
+```
+
+UI on http://localhost:3000. Ports are bound to loopback only: the API
+has no auth and runs with Kind's cluster-admin kubeconfig.
 
 ## Evaluating the agent
 

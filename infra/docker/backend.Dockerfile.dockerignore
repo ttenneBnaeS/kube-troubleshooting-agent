@@ -1,0 +1,11 @@
+# Secrets and local state never enter the image; .env is passed at runtime.
+.env
+.env.*
+!.env.example
+.venv/
+data/
+eval/results/
+tests/
+**/__pycache__/
+.pytest_cache/
+.ruff_cache/
