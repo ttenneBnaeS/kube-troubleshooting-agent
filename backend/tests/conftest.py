@@ -1,5 +1,14 @@
 """Shared fixtures. Tests cover the deterministic layer only: no cluster, no model calls."""
 
+import os
+
+# Before anything imports `api.main`, which loads `.env` into the process
+# environment for tracing. load_dotenv never overrides a set variable, so
+# this keeps a developer's LANGSMITH_TRACING=true from sending test runs
+# to LangSmith.
+os.environ["LANGSMITH_TRACING"] = "false"
+os.environ["LANGCHAIN_TRACING_V2"] = "false"
+
 import json
 
 import pytest

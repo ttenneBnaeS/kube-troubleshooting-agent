@@ -293,12 +293,16 @@ Optional and env-gated. Set in `backend/.env`:
 ```
 LANGSMITH_TRACING=true
 LANGSMITH_API_KEY=...
-LANGSMITH_PROJECT=kube-troubleshooting-agent-eval
+LANGSMITH_EVAL_PROJECT=kube-troubleshooting-agent-eval   # the default
 ```
 
-`tracing.py` loads `.env` into the process environment before anything
-imports LangChain (pydantic-settings doesn't export to `os.environ`, and
-LangChain reads it directly). Each run is tagged `eval` and
+Eval traces to `LANGSMITH_EVAL_PROJECT`, never to `LANGSMITH_PROJECT`
+(the API's): before Week 7 the harness only *defaulted* the project, so
+a `LANGSMITH_PROJECT` already in `.env` silently put eval runs in the
+same project as everything else. `observability/tracing.py` loads `.env`
+into the process environment before anything imports LangChain
+(pydantic-settings doesn't export to `os.environ`, and LangChain reads it
+directly). Each run is tagged `eval` and
 `scenario:<id>` so a failure is findable per-node. With the vars unset,
 runs proceed untraced and the JSON records remain the log.
 

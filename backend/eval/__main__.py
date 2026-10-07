@@ -11,12 +11,12 @@ import sys
 
 from .tracing import init_tracing
 
-TRACING_ON = init_tracing()
+TRACING_PROJECT = init_tracing()
 
-from . import cluster  # noqa: E402  (must follow init_tracing)
-from .report import print_report, summarize, write_results  # noqa: E402
-from .runner import run_scenario  # noqa: E402
-from .scenarios import SCENARIOS_BY_ID, get_scenarios  # noqa: E402
+from . import cluster  # must follow init_tracing
+from .report import print_report, summarize, write_results
+from .runner import run_scenario
+from .scenarios import SCENARIOS_BY_ID, get_scenarios
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -65,7 +65,7 @@ async def main_async(args: argparse.Namespace) -> int:
     scenarios = get_scenarios(args.scenario)
     cluster.ensure_kubectl_available()
 
-    print(f"Running {len(scenarios)} scenario(s). LangSmith tracing: {'on' if TRACING_ON else 'off'}.")
+    print(f"Running {len(scenarios)} scenario(s). LangSmith tracing: {f'on, project {TRACING_PROJECT}' if TRACING_PROJECT else 'off'}.")
     if not args.no_judge:
         print("Scoring: deterministic signal check + LLM judge.")
     else:
@@ -97,7 +97,7 @@ async def main_async(args: argparse.Namespace) -> int:
         records.append(record)
 
     summary = summarize(records)
-    results_path = write_results(records, summary, TRACING_ON)
+    results_path = write_results(records, summary, TRACING_PROJECT is not None)
     print_report(records, summary, results_path)
     return 0 if summary.scored == summary.total else 1
 

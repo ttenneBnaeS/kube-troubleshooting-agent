@@ -4,6 +4,12 @@ import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+from observability.tracing import flush_traces, init_tracing
+
+# Before LangChain is imported: it reads tracing config from the process
+# environment, which this populates from .env.
+TRACING_PROJECT = init_tracing("LANGSMITH_PROJECT", "kube-troubleshooting-agent")
+
 import aiosqlite
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -40,8 +46,13 @@ async def lifespan(app: FastAPI):
     async with aiosqlite.connect(settings.checkpoint_db_path) as conn:
         checkpointer = AsyncSqliteSaver(conn, serde=checkpoint_serializer())
         app.state.graph = build_graph(checkpointer)
-        log.info("api.started", extra={"checkpoint_db": settings.checkpoint_db_path})
+        log.info(
+            "api.started",
+            extra={"checkpoint_db": settings.checkpoint_db_path, "tracing_project": TRACING_PROJECT},
+        )
         yield
+    if TRACING_PROJECT:
+        flush_traces()
 
 
 app = FastAPI(title="Kubernetes Troubleshooting Agent", lifespan=lifespan)
@@ -108,15 +119,36 @@ async def get_thread(thread_id: str) -> dict:
     return {"thread_id": thread_id, "messages": messages}
 
 
+def turn_config(thread_id: str, request_id: str) -> dict:
+    """LangGraph config for one chat turn: checkpoint thread plus trace identity.
+
+    `thread_id` in metadata is what LangSmith groups a conversation's turns
+    into a thread by. The root `run_id` is minted here rather than left to
+    LangChain so it can be logged before the run starts.
+    """
+    return {
+        "configurable": {"thread_id": thread_id},
+        "run_id": uuid.uuid4(),
+        "run_name": "chat_turn",
+        "tags": ["api"],
+        "metadata": {"thread_id": thread_id, "request_id": request_id},
+    }
+
+
 @app.post("/api/chat")
 async def chat(req: ChatRequest) -> EventSourceResponse:
     graph = app.state.graph
-    config = {"configurable": {"thread_id": req.thread_id}}
+    request_id = uuid.uuid4().hex[:12]
+    config = turn_config(req.thread_id, request_id)
 
     async def event_stream():
         # Bound inside the generator: it runs in the response task, so a
         # context set in the endpoint body wouldn't reach the graph's logs.
-        with bind(request_id=uuid.uuid4().hex[:12], thread_id=req.thread_id):
+        context = {"request_id": request_id, "thread_id": req.thread_id}
+        if TRACING_PROJECT:
+            # The trace's root run id, so a log line leads to its trace.
+            context["trace_id"] = str(config["run_id"])
+        with bind(**context):
             async for event in _turn_events(graph, req, config):
                 yield event
 

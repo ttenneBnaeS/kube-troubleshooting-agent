@@ -99,9 +99,17 @@ limits, so parallelism produces flake that reads as agent error. Don't
 
 Each run writes a full JSON record to `backend/eval/results/`
 (gitignored). LangSmith tracing is optional, env-gated via `LANGSMITH_*`
-in `backend/.env`; `eval/tracing.py` has to load `.env` into `os.environ`
-itself, because backend config goes through pydantic-settings (which
-doesn't export there) while LangChain reads the environment directly.
+in `backend/.env`; `observability/tracing.py` has to load `.env` into
+`os.environ` itself, because backend config goes through
+pydantic-settings (which doesn't export there) while LangChain reads the
+environment directly. The API traces to `LANGSMITH_PROJECT` and eval to
+`LANGSMITH_EVAL_PROJECT` (set, not defaulted, so they never mix). Each
+API turn is a `chat_turn` root run whose `run_id` is minted in
+`api.main.turn_config` and logged as `trace_id`, with `thread_id` in
+metadata so LangSmith groups a conversation as one thread. Because
+importing `api.main` loads `.env`, `tests/conftest.py` forces
+`LANGSMITH_TRACING=false` first — otherwise a developer's `.env` sends
+every test run to LangSmith (`test_the_test_suite_never_traces`).
 
 ### Kubernetes cluster (required for the tool layer)
 

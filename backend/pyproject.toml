@@ -52,3 +52,8 @@ select = ["E", "F", "I", "B", "UP", "SIM", "RUF"]
 # Tool docstrings are the descriptions the model reads, kept on one line
 # so wrapping can't change them; scenario data is long string literals.
 ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+# Tracing env must be loaded before LangChain is imported (observability.tracing).
+"api/main.py" = ["E402"]
+"eval/__main__.py" = ["E402"]
