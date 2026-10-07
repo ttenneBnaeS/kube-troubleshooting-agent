@@ -9,13 +9,14 @@ const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
 async function streamChat(
   message: string,
-  history: Message[],
+  threadId: string,
   onToken: (text: string) => void,
 ) {
+  // History lives server-side in the agent's checkpointer, keyed by thread.
   const res = await fetch(`${API_URL}/api/chat`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ message, history }),
+    body: JSON.stringify({ message, thread_id: threadId }),
   });
   if (!res.ok || !res.body) {
     throw new Error(`chat request failed: ${res.status}`);
@@ -56,19 +57,21 @@ export default function Home() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [pending, setPending] = useState(false);
+  // One conversation thread per page load for now; persisting it across
+  // reloads (and a "new conversation" control) comes with thread rehydration.
+  const [threadId] = useState(() => crypto.randomUUID());
 
   async function send() {
     const text = input.trim();
     if (!text || pending) return;
 
-    const history = messages;
     const userMsg: Message = { role: "user", content: text };
-    setMessages([...history, userMsg, { role: "assistant", content: "" }]);
+    setMessages([...messages, userMsg, { role: "assistant", content: "" }]);
     setInput("");
     setPending(true);
 
     try {
-      await streamChat(text, history, (token) => {
+      await streamChat(text, threadId, (token) => {
         setMessages((prev) => {
           const next = [...prev];
           const last = next[next.length - 1];
@@ -101,9 +104,9 @@ export default function Home() {
           {messages.length === 0 && (
             <p className="text-sm text-zinc-500">
               Ask about a pod, deployment, service, or node — the agent can
-              call read-only cluster tools and search official K8s docs to
-              ground its answer (Week 3: bounded multi-round tool loop,
-              not yet the full LangGraph investigation loop).
+              investigate with read-only cluster tools, diagnose the root
+              cause, and suggest a fix citing the official K8s docs.
+              Follow-up questions keep the conversation&apos;s context.
             </p>
           )}
           {messages.map((m, i) => (

@@ -12,10 +12,13 @@ both into flaky failures that look like agent errors.
 
 import time
 import traceback
+import uuid
 from dataclasses import asdict, dataclass, field
 
-from graph import troubleshooting_graph
-from graph.state import AgentState
+from langgraph.checkpoint.memory import InMemorySaver
+
+from graph import build_graph, new_turn_input
+from graph.state import AgentState, checkpoint_serializer
 
 from . import cluster
 from .scenarios import Scenario
@@ -33,6 +36,10 @@ INITIAL_SWEEP = "initial_sweep"
 # scenario reports get_pod_status/get_recent_events as missed even when
 # the sweep put that evidence in front of the model on turn one.
 SWEEP_EQUIVALENT_TOOLS = frozenset({"get_pod_status_tool", "get_recent_events_tool"})
+
+# Same checkpointed graph the API runs, minus the SQLite file: each run
+# gets its own thread, so scenarios never see each other's conversation.
+_graph = build_graph(InMemorySaver(serde=checkpoint_serializer()))
 
 
 @dataclass
@@ -125,10 +132,9 @@ async def run_scenario(
 
     try:
         started = time.monotonic()
-        final_state = await troubleshooting_graph.ainvoke(
-            {"user_request": record.user_request, "messages": []},
-            config=run_config(scenario.id, namespace, rag=rag),
-        )
+        config = run_config(scenario.id, namespace, rag=rag)
+        config["configurable"]["thread_id"] = f"eval-{scenario.id}-{uuid.uuid4().hex[:8]}"
+        final_state = await _graph.ainvoke(new_turn_input(record.user_request), config=config)
         record.duration_seconds = round(time.monotonic() - started, 1)
         _populate_from_state(record, final_state, scenario)
         record.status = "scored"

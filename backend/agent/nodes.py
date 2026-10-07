@@ -4,15 +4,25 @@ See docs/architecture.md §7 for the responsibility of each node. Fact
 gathering (`gather_context`, `execute_tool`) is plain Python against the
 existing tool catalog; judgment (`intake`, `plan`, `diagnose`,
 `recommend`) is LLM-driven, tier-routed through `models.config`.
+`finalize` is the only node that writes conversation state.
 """
 
 import asyncio
 import json
 
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
 
-from graph.state import LOOP_GUARD_MAX, AgentState, Diagnosis, ReferenceDoc, Scope, ToolCallRecord
+from graph.state import (
+    DEFAULT_CLARIFYING_QUESTION,
+    LOOP_GUARD_MAX,
+    AgentState,
+    Diagnosis,
+    ReferenceDoc,
+    Scope,
+    ToolCallRecord,
+    TurnRecord,
+)
 from models.config import ModelTier, get_chat_model
 from prompts import load_prompt
 from rag import search_docs, search_k8s_docs_tool
@@ -57,7 +67,7 @@ async def intake(state: AgentState) -> dict:
 
 def route_after_intake(state: AgentState) -> str:
     if state.scope and state.scope.needs_clarification:
-        return "end"
+        return "finalize"
     return "gather_context"
 
 
@@ -237,3 +247,30 @@ async def recommend(state: AgentState) -> dict:
     # AgentState validation after the run has already finished. Eval
     # caught this on `logtail`; it doesn't happen on every response.
     return {"recommendation": response.text}
+
+
+def _reply_text(state: AgentState) -> str:
+    """What the user was shown this turn: the recommendation, or intake's question."""
+    if state.recommendation is not None:
+        return state.recommendation
+    question = state.scope.clarifying_question if state.scope else None
+    return question or DEFAULT_CLARIFYING_QUESTION
+
+
+async def finalize(state: AgentState) -> dict:
+    # Every turn ends here, including one `intake` ended early with a
+    # clarifying question: recording that question in `messages` is what
+    # lets the user's answer to it make sense on the next turn.
+    turn = TurnRecord(
+        user_request=state.user_request,
+        scope=state.scope,
+        investigation_log=state.investigation_log,
+        diagnosis=state.diagnosis,
+        reference_docs=state.reference_docs,
+        recommendation=state.recommendation,
+        loop_guard_triggered=state.loop_guard_triggered,
+    )
+    return {
+        "messages": [HumanMessage(content=state.user_request), AIMessage(content=_reply_text(state))],
+        "turns": [turn],
+    }

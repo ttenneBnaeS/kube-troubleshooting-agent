@@ -1,11 +1,8 @@
 from pydantic import BaseModel
 
 
-class ChatMessage(BaseModel):
-    role: str  # "user" | "assistant"
-    content: str
-
-
 class ChatRequest(BaseModel):
     message: str
-    history: list[ChatMessage] = []
+    # Conversation history lives server-side in the checkpointer, keyed by
+    # this id; the client generates it and resends it each turn.
+    thread_id: str

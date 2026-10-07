@@ -1,12 +1,31 @@
+from contextlib import asynccontextmanager
+from pathlib import Path
+
+import aiosqlite
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
+from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from sse_starlette.sse import EventSourceResponse
 
+from api.config import settings
 from api.schemas import ChatRequest
-from graph import troubleshooting_graph
+from graph import build_graph, new_turn_input
+from graph.state import DEFAULT_CLARIFYING_QUESTION, checkpoint_serializer
 
-app = FastAPI(title="Kubernetes Troubleshooting Agent")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # The checkpointer holds an open aiosqlite connection, so it has to be
+    # entered for the app's lifetime rather than built at import time.
+    Path(settings.checkpoint_db_path).parent.mkdir(parents=True, exist_ok=True)
+    async with aiosqlite.connect(settings.checkpoint_db_path) as conn:
+        checkpointer = AsyncSqliteSaver(conn, serde=checkpoint_serializer())
+        app.state.graph = build_graph(checkpointer)
+        yield
+
+
+app = FastAPI(title="Kubernetes Troubleshooting Agent", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -32,10 +51,8 @@ def _field(state, name, default=None):
 
 @app.post("/api/chat")
 async def chat(req: ChatRequest) -> EventSourceResponse:
-    history: list[BaseMessage] = [
-        (HumanMessage if m.role == "user" else AIMessage)(content=m.content) for m in req.history
-    ]
-    initial_state = {"user_request": req.message, "messages": history}
+    graph = app.state.graph
+    config = {"configurable": {"thread_id": req.thread_id}}
 
     async def event_stream():
         try:
@@ -47,8 +64,8 @@ async def chat(req: ChatRequest) -> EventSourceResponse:
             # state after each node so we can fall back to a clarifying
             # question if `intake` short-circuited the graph before
             # `recommend` ever ran (docs/architecture.md §7).
-            async for stream_mode, chunk in troubleshooting_graph.astream(
-                initial_state, stream_mode=["messages", "values"]
+            async for stream_mode, chunk in graph.astream(
+                new_turn_input(req.message), config=config, stream_mode=["messages", "values"]
             ):
                 if stream_mode == "messages":
                     message, metadata = chunk
@@ -63,7 +80,7 @@ async def chat(req: ChatRequest) -> EventSourceResponse:
             if not streamed_recommendation:
                 scope = _field(final_state, "scope")
                 question = _field(scope, "clarifying_question") if scope else None
-                yield {"event": "token", "data": question or "Could you say more about what's going wrong?"}
+                yield {"event": "token", "data": question or DEFAULT_CLARIFYING_QUESTION}
         except Exception as exc:
             yield {"event": "error", "data": str(exc)}
             return

@@ -81,12 +81,19 @@ class AgentState(BaseModel):
     step_count: int = 0                      # loop guard
 ```
 
+**As built (Week 6):** the fields split into *conversation* state
+(`messages`, plus `turns: list[TurnRecord]` archiving each finished turn's
+scope, evidence, diagnosis and recommendation), persisted by the
+checkpointer through append-only reducers, and *run* state (everything
+else), reset to defaults at the start of every turn by `new_turn_input()`.
+
 ## 7. Graph: nodes and edges
 
 ```
 intake → gather_context → plan
 plan ──(need more evidence)──▶ execute_tool ──▶ plan     # bounded loop
-plan ──(enough evidence)─────▶ diagnose ──▶ ground ──▶ recommend ──▶ END
+plan ──(enough evidence)─────▶ diagnose ──▶ ground ──▶ recommend ──▶ finalize ──▶ END
+intake ──(needs clarification)──▶ finalize
 ```
 
 | Node | Type | Responsibility |
@@ -98,6 +105,7 @@ plan ──(enough evidence)─────▶ diagnose ──▶ ground ──�
 | `diagnose` | LLM, reasoning tier | Synthesize root cause, confidence level, cite supporting evidence. |
 | `ground` | deterministic | Retrieve doc pages for the diagnosed root cause (§8), for `recommend` to cite. |
 | `recommend` | LLM, reasoning tier | Produce the suggested fix as text, explicitly framed as human-run, citing retrieved docs where they support it. |
+| `finalize` | deterministic | Archive the turn: append the Human/AI messages and a `TurnRecord` to conversation state. |
 
 ### Loop guard
 
@@ -111,6 +119,11 @@ LangGraph's checkpointer persists state across turns, enabling follow-ups
 ("what about the other pod?") without re-running the full investigation,
 and doubles as the foundation for human-in-the-loop approval gates if added
 later.
+
+As built: `AsyncSqliteSaver` in the API, one thread per client-generated
+`thread_id`; the client sends only the new message. SQLite over the
+in-memory saver so threads survive a server restart at the cost of one
+file; Postgres would be overkill for a single-process demo.
 
 ## 8. RAG
 
@@ -222,9 +235,9 @@ were otherwise unsolvable by construction rather than merely hard:
 anywhere) and configmap/secret support in `describe_resource` (a
 wrong-key diagnosis depends on which keys the object really has).
 
-Not yet built: checkpointed conversational memory (§7's "Checkpointing &
-memory" — Week 6; today's multi-turn context is the client resending full
-history into `AgentState.messages`), the investigation-trail UI (Week 6),
+Week 6 so far: checkpointed conversational memory (§7). Not yet built:
+follow-up routing that answers from prior turns without re-investigating,
+the investigation-trail UI (Week 6),
 tests and Dockerization (Week 7), and the MCP server (Week 8). The
 RBAC-scoped read-only credentials called for in §5 remain open —
 enforcement today is code-layer only.

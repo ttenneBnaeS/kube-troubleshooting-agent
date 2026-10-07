@@ -5,9 +5,12 @@ typed state threaded through the graph, fact-gathering nodes producing
 normalized structured data, and judgment nodes (LLM) reasoning over it.
 """
 
-from typing import Literal
+import operator
+from typing import Annotated, Literal
 
-from langchain_core.messages import BaseMessage
+from langchain_core.messages import AnyMessage
+from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
+from langgraph.graph.message import add_messages
 from pydantic import BaseModel, ConfigDict, Field
 
 # Cap on plan->execute_tool iterations (docs/architecture.md §7 "Loop
@@ -93,18 +96,46 @@ class ReferenceDoc(BaseModel):
     score: float
 
 
+class TurnRecord(BaseModel):
+    """One finished conversation turn, archived by `finalize`.
+
+    The run fields on `AgentState` are reset at the start of every turn,
+    so this is where a turn's evidence survives for later turns to use.
+    """
+
+    user_request: str
+    scope: Scope | None = None
+    investigation_log: list[ToolCallRecord] = []
+    diagnosis: Diagnosis | None = None
+    reference_docs: list[ReferenceDoc] = []
+    recommendation: str | None = None
+    loop_guard_triggered: bool = False
+
+
+# What a turn says when `intake` asked for clarification but produced no
+# question text. Shared with the API's streaming fallback so the reply the
+# user sees and the one recorded in `messages` can't drift apart.
+DEFAULT_CLARIFYING_QUESTION = "Could you say more about what's going wrong?"
+
+
 class AgentState(BaseModel):
     # BaseMessage subclasses aren't plain pydantic models in every
     # langchain-core version, so state validation needs this relaxed.
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     user_request: str
-    # Prior conversation turns (Human/AI), passed in from the API layer so
-    # follow-ups have context. Real checkpointed memory is Week 6 — see
-    # docs/architecture.md §3.5/§7; this is the same "client resends
-    # history" approach Weeks 1-3 already used.
-    messages: list[BaseMessage] = []
 
+    # --- Conversation state: persisted across turns by the checkpointer.
+    # Both are append-only via reducers, and only `finalize` writes them.
+    # Prior Human/AI turns, so follow-ups have context.
+    messages: Annotated[list[AnyMessage], add_messages] = []
+    turns: Annotated[list[TurnRecord], operator.add] = []
+
+    # --- Run state: everything below is reset at the start of each turn
+    # (see `new_turn_input`). With a checkpointer, a turn's input is merged
+    # into the saved state rather than replacing it, so without the reset
+    # `step_count` would accumulate until the loop guard tripped before
+    # the first tool call, and turn 2 would diagnose over turn 1's log.
     scope: Scope | None = None
     context_snapshot: dict = {}
     investigation_log: list[ToolCallRecord] = []
@@ -122,3 +153,35 @@ class AgentState(BaseModel):
     # between the two nodes, not part of the architecture doc's state
     # shape, but the loop can't pass a decision otherwise.
     pending_tool_call: dict | None = None
+
+
+CONVERSATION_FIELDS = frozenset({"messages", "turns"})
+
+
+def new_turn_input(user_request: str) -> dict:
+    """Graph input for a new turn: the request plus every run field at its default.
+
+    Derived from the model rather than listed by hand, so a run field added
+    later is reset automatically instead of silently leaking across turns.
+    """
+    reset = {
+        name: info.get_default(call_default_factory=True)
+        for name, info in AgentState.model_fields.items()
+        if name not in CONVERSATION_FIELDS and name != "user_request"
+    }
+    return {**reset, "user_request": user_request}
+
+
+def checkpoint_serializer() -> JsonPlusSerializer:
+    """Serializer for checkpointers: strict, allowing only our state models.
+
+    By default LangGraph deserializes any class named in a checkpoint (with
+    a warning, slated to become an error). An explicit allowlist restricts
+    it to LangGraph's built-in safe types plus these, so a tampered
+    checkpoint DB can't instantiate arbitrary classes. A new model nested
+    in state has to be added here, or loading a thread that contains it
+    fails.
+    """
+    return JsonPlusSerializer(
+        allowed_msgpack_modules=[Scope, ToolCallRecord, Diagnosis, ReferenceDoc, TurnRecord]
+    )

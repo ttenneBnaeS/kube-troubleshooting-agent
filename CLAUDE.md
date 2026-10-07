@@ -27,7 +27,7 @@ client. `backend/rag/` has a real RAG pipeline (curated K8s/kubectl doc
 corpus → Voyage AI embeddings → Qdrant) exposed as another tool.
 `backend/graph/` and `backend/agent/` hold a real LangGraph state machine
 (`intake` → `gather_context` → `plan`/`execute_tool` loop → `diagnose` →
-`ground` → `recommend`) that `backend/api/main.py`'s chat endpoint drives directly —
+`ground` → `recommend` → `finalize`) that `backend/api/main.py`'s chat endpoint drives directly —
 the Week 1-3 bounded probe/execute round-trip in `main.py` is gone.
 `backend/eval/` holds the Week 5 eval harness, and
 `backend/eval/scenarios.py` has twenty golden-labelled failure scenarios
@@ -35,11 +35,12 @@ the Week 1-3 bounded probe/execute round-trip in `main.py` is gone.
 built specifically to make the agent fail (see `backend/eval/README.md`,
 "Scenarios built to fail").
 
-Still open: `tests/` and `demo/` are empty placeholders; conversational
-memory is still "client resends full history" (`AgentState.messages`), not
-a LangGraph checkpointer — that's Week 6, along with the
-investigation-trail UI. Week 7 is tests/Docker/structured logging, Week 8
-the MCP server.
+Week 6 is in progress: conversational memory is a LangGraph checkpointer
+(SQLite, keyed by a client-generated `thread_id`) — done; follow-up
+routing (answering from prior turns without re-investigating), thread
+rehydration on page reload, and the investigation-trail UI are not yet.
+`tests/` and `demo/` are empty placeholders. Week 7 is
+tests/Docker/structured logging, Week 8 the MCP server.
 
 Note the layout deviation: the plan and `docs/architecture.md` §10 sketch
 `eval/` at the repo root, but it lives at `backend/eval/` because backend
@@ -222,14 +223,33 @@ public by construction).
   turns off both `ground` and the planner's docs tool (`eval --no-rag`). The plan↔execute_tool loop
   is capped at `graph.state.LOOP_GUARD_MAX` (8) — see
   `docs/architecture.md` §3.4/§7. `backend/api/main.py`'s chat endpoint
-  calls `troubleshooting_graph.astream(..., stream_mode=["messages",
-  "values"])`: `"messages"` chunks tagged `langgraph_node == "recommend"`
+  calls `graph.astream(new_turn_input(message), config={"configurable":
+  {"thread_id": ...}}, stream_mode=["messages", "values"])`: `"messages"` chunks tagged `langgraph_node == "recommend"`
   stream token-by-token to the frontend (the only node whose output is
   meant to read as prose); `"values"` chunks track the final state so the
   endpoint can fall back to `scope.clarifying_question` when `intake`
   ended the run early. Don't stream any other node's output — `diagnose`
   and `intake` use `with_structured_output`, which forces tool-calling
   under the hood and has no user-facing text to stream.
+- **Conversation memory** (`graph/state.py`): `AgentState` is split into
+  *conversation* fields (`messages`, `turns` — append-only reducers,
+  persisted by the checkpointer, written only by the `finalize` node,
+  which every turn ends in, clarifying-question turns included) and
+  *run* fields (everything else). A checkpointer merges a turn's input
+  into the saved state rather than replacing it, so **every graph input
+  must come from `new_turn_input()`**, which resets each run field to its
+  default — pass a bare `{"user_request": ...}` and `step_count`
+  accumulates until the loop guard trips before the first tool call,
+  and the new turn diagnoses over the last one's evidence. It derives the
+  reset from the model's fields, so a new run field needs no extra
+  wiring; a new *conversation* field must be added to
+  `CONVERSATION_FIELDS`. `build_graph(checkpointer)` is a factory: the
+  API compiles it with `AsyncSqliteSaver` (`backend/data/checkpoints.db`,
+  gitignored, `API_CHECKPOINT_DB_PATH`) opened in the FastAPI lifespan;
+  the eval runner with `InMemorySaver` and a fresh thread per scenario.
+  Both use `checkpoint_serializer()`, a strict msgpack allowlist of our
+  state models — **a new Pydantic model nested in state must be added
+  there**, or loading a thread containing it fails.
 - **Tool catalog** (`backend/tools/`): plain functions
   (`pods.py`/`events.py`/`logs.py`/`nodes.py`/`services.py`/`describe.py`/`policies.py`)
   against the official `kubernetes` Python client — chosen over shelling
@@ -338,7 +358,7 @@ public by construction).
   suggested as text, never executed by the agent.
 - **LangChain vs. LangGraph**: LangGraph now owns orchestration — the
   state graph in `backend/graph/build.py`, the plan/execute loop, the
-  loop guard. Checkpointing is not wired in yet (Week 6). LangChain is
+  loop guard, the checkpointer. LangChain is
   used for RAG plumbing (`langchain-qdrant`, `langchain-text-splitters`,
   `langchain-voyageai`) and the model wrapper (`ChatAnthropic`) only; the
   node functions in `backend/agent/nodes.py` call `chat_model`/tools
