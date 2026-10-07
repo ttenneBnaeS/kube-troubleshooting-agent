@@ -53,6 +53,11 @@ def _is_citation(url: str) -> bool:
     aren't citations, so they mustn't count as made-up sources.
     """
     host = url.split("://", 1)[1].split("/", 1)[0].split(":", 1)[0]
+    # An IP literal is an in-cluster address in a command (`curl
+    # http://10.244.0.127:80`), not a source; a full run once counted one
+    # as an invented citation.
+    if host.replace(".", "").isdigit():
+        return False
     return "." in host and not host.endswith((".local", ".svc", ".cluster"))
 
 

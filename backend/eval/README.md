@@ -57,6 +57,8 @@ single run is not a score:
 | B | full suite | 19/21 | `logtail`, `needle` | |
 | C | full suite | 17/21 | `logtail`, `needle`, `crossns`, `targetport` | last run before the namespace fix |
 | D | full suite | 19/21 | `logtail`, `needle` | after the namespace fix |
+| E | full suite | 18/21 | `logtail`, `needle`, `targetport` | 2026-10-06, after `intake_v3` (follow-up routing); 0 ended at intake |
+| F | full suite + follow-ups | 19/21 | `logtail`, `needle` | 2026-10-06, Weeks 6-8 code; follow-ups 4/4; README headline |
 
 Most predicted failures didn't happen. The reasoning tier sees through
 one-step traps: it rejected the user's DNS guess, read the previous
@@ -77,7 +79,8 @@ event by filtering events to the pod. What does fail:
   for asserting at medium confidence that nothing in the container listens
   at all, a claim no tool can support. In run D it passed at low
   confidence. It's on the line between the two, so read it over several
-  runs.
+  runs: it failed again in run E (asserting no listener at all) and
+  passed in run F.
 - `crossns` — failed once (run C) by hitting the loop guard. See the
   namespace bug below.
 

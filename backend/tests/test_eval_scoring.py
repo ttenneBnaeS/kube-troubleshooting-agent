@@ -48,7 +48,7 @@ class TestCitations:
     def test_in_cluster_addresses_are_not_citations(self):
         text = (
             "See [Secrets](https://kubernetes.io/docs/concepts/configuration/secret/#uses). "
-            "Then `curl http://payments-api:8080/health` and http://web.default.svc/x."
+            "Then `curl http://payments-api:8080/health`, http://web.default.svc/x and http://10.244.0.127:80."
         )
         assert cited_urls(text) == ["https://kubernetes.io/docs/concepts/configuration/secret"]
 

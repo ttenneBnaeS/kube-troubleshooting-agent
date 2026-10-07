@@ -11,8 +11,10 @@ K8s/kubectl doc corpus, embedding, and retrieval, per `docs/architecture.md` §8
 - `retriever.py` — `search_docs(query, k)`, returns normalized
   `{title, source_url, content, score}` results, no LangChain dependency.
 - `langchain_tool.py` — `@tool`-wrapped `search_k8s_docs_tool` for
-  Anthropic tool calling, bound alongside the cluster tools in
-  `backend/api/main.py`.
+  Anthropic tool calling, bound alongside the cluster tools in the `plan`
+  node (`backend/agent/nodes.py`). In practice the planner never calls it
+  (see `backend/eval/README.md`); the `ground` node calls `search_docs`
+  directly to cite sources for the fix.
 
 Requires a running Qdrant (`docker run -p 6333:6333 -p 6334:6334 -v
 qdrant_storage:/qdrant/storage qdrant/qdrant`) and a populated collection

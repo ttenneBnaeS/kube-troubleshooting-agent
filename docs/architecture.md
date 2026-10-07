@@ -63,6 +63,9 @@ Fact-gathering is deterministic; judgment is LLM-driven. Concretely:
   is no tool that applies a fix.
 - This is enforced at the tool layer, not the prompt layer. The model is
   never given a mutating tool to be told not to use.
+- The MCP server (§12) inherits all of this unchanged: it exposes the
+  agent, which can only reach the cluster through these tools, and
+  annotates its one tool `readOnlyHint`.
 
 ## 6. State object
 
@@ -212,6 +215,7 @@ backend/
   prompts/      # versioned prompt templates
   models/       # model config, tier routing
   observability/  # structured logging, LangSmith tracing setup
+  mcp_server/   # the `investigate` MCP tool (§12)
   eval/         # scenarios, golden labels, harness, scorers
   tests/        # pytest, deterministic layer only
 frontend/
@@ -261,6 +265,37 @@ check that `tools/` only calls read verbs on the Kubernetes client (§5's
 boundary, enforced by test as well as by construction); structured JSON
 logging with per-turn request/thread context; LangSmith tracing for the
 API, separate from eval's project; and Docker images plus a Compose
-stack. Not yet built: the MCP server (Week 8). The
+stack.
+
+Week 8: the MCP server (§12), the README, and the demo walkthrough. The
 RBAC-scoped read-only credentials called for in §5 remain open —
-enforcement today is code-layer only.
+enforcement today is code-layer only, backed by a test.
+
+## 12. MCP server
+
+The plan called for an MCP server "exposing the read-only K8s
+operations." What got built exposes the *agent* instead: one tool,
+`investigate(request, namespace?)`, which runs the full graph and returns
+a structured result: the diagnosis with confidence and evidence, the
+fix, and the same trail steps the UI renders.
+
+Why the change: a server mirroring the seven read-only tools would have
+no consumer in this project (the agent calls its tools directly) and
+would duplicate what existing Kubernetes MCP servers already offer. What
+this project adds is the investigation itself, a bounded plan/execute
+loop with a measured diagnosis rate, so that's what's exposed. It lets
+the agent run from the assistant an engineer already uses.
+
+Decisions:
+
+- **Stateless per call.** Each call is a fresh checkpoint thread. The
+  client assistant keeps the conversation, and the returned trail carries
+  the evidence, so the client can answer follow-ups itself. Server-side
+  memory would duplicate the client's.
+- **Progress, not silence.** A run takes 20-60 seconds; the tool reports
+  progress per graph node.
+- **Clarification as data.** If `intake` can't resolve a scope, the
+  result is `status: needs_clarification` with the question, for the
+  client to put to the user.
+- **stdio only.** It's a local tool against a local cluster; logs go to
+  stderr because stdout is the protocol stream.

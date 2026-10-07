@@ -44,8 +44,14 @@ Week 7 is done: pytest + ruff (backend), `node:test` (frontend),
 structured logging, API tracing, and Docker/Compose (`infra/docker/`).
 Basic auth was skipped deliberately — the plan lists public deployment
 under "cut first" and a local demo is the target. `demo/` is still an
-empty placeholder. Week 8: the MCP server (`backend/mcp_server/`) is done; README and demo
-remain.
+empty placeholder. Week 8 is done: the MCP server (`backend/mcp_server/`), the README
+rewrite (its Results table is from eval run F, 2026-10-06), and `demo/`:
+a walkthrough script plus `record.mjs`, which drives the real UI with
+Playwright, records video to `demo/out/` (gitignored), and refreshes
+`docs/images/trail.png`. The walkthrough describes what recordings
+actually showed, including the variance in scenario 3 (whether turn 1
+describes the pod or the Secret). Keep it that way: if a re-recording
+contradicts it, fix the text, don't rig the scenario.
 
 Note the layout deviation: the plan and `docs/architecture.md` §10 sketch
 `eval/` at the repo root, but it lives at `backend/eval/` because backend
@@ -137,8 +143,8 @@ nonexistent Secret → CreateContainerConfigError), `configmap-demo.yaml`
 `dns-demo.yaml` (client calls `payments-api`; the Service is named
 `payments`), `networkpolicy-demo.yaml` (policy admits only
 `app=allowed-client`, so the real client is dropped), `selector-demo.yaml`
-(Service selects `app=search-api-v2`, pods are labelled `app=search-api` →
-no endpoints), `distractor-demo.yaml` (the same selector bug plus a loud
+(Service selects `component=search,tier=frontend`, pods are labelled
+`tier=api` → no endpoints), `distractor-demo.yaml` (the same selector bug plus a loud
 unrelated crashlooping pod — an anchoring A/B against `selector-demo`),
 `initcontainer-demo.yaml` (init container exits 1, so the pod never leaves
 Init), and `web-demo.yaml` (healthy nginx Deployment+Service, for
