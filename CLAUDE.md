@@ -76,6 +76,7 @@ uv run python -m eval -s dns -s secret  # a subset
 uv run python -m eval --list            # what's available
 uv run python -m eval --no-judge        # deterministic scoring only (no LLM judge calls)
 uv run python -m eval --keep            # leave eval-* namespaces up to inspect
+uv run python -m eval --no-followups    # first turn only, skip multi-turn follow-ups
 ```
 
 Runs are sequential deliberately — scenarios contend for node memory (the
@@ -274,6 +275,11 @@ public by construction).
   pod/deployment/service/node/configmap/secret, and for configmap/secret
   returns **key names and value sizes but never values** — the
   missing-key diagnoses it exists for need the key list and nothing more.
+  For a pod it also returns `config_references`: every Secret/ConfigMap
+  the pod reads via `env`/`envFrom`/volumes, with the key it asks for —
+  again never values, and literal `env[].value` strings are omitted
+  entirely. It deliberately does **not** return container ports: the
+  `targetport` scenario exists to measure honesty about that gap.
   `get_network_policies` resolves each policy's label selector server-side
   into the pods it actually selects, so the model isn't evaluating
   selectors by eye. `get_pod_status` returns `init_containers` separately

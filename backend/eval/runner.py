@@ -21,8 +21,8 @@ from graph import build_graph, new_turn_input
 from graph.state import AgentState, checkpoint_serializer
 
 from . import cluster
-from .scenarios import Scenario
-from .scorers import DiagnosisScore, cited_urls, corpus_urls, score_diagnosis
+from .scenarios import FollowUp, Scenario
+from .scorers import DiagnosisScore, cited_urls, corpus_urls, missing_signals, score_diagnosis
 from .tracing import run_config
 
 # The initial sweep is a fixed deterministic node, not a planner decision,
@@ -48,6 +48,38 @@ class ToolCallSummary:
     args: dict
     result_chars: int
     namespace_filled: bool = False
+
+
+@dataclass
+class FollowUpRecord:
+    request: str
+    expected_route: str
+    route: str = ""
+    planner_tool_calls: int = 0
+    reply: str = ""
+    missing_signals: list[list[str]] = field(default_factory=list)
+    duration_seconds: float = 0.0
+    error: str = ""
+
+    @property
+    def route_correct(self) -> bool:
+        return self.route == self.expected_route
+
+    @property
+    def answered(self) -> bool:
+        return not self.error and not self.missing_signals
+
+    @property
+    def passed(self) -> bool:
+        return self.route_correct and self.answered
+
+    def to_dict(self) -> dict:
+        return {
+            **asdict(self),
+            "route_correct": self.route_correct,
+            "answered": self.answered,
+            "passed": self.passed,
+        }
 
 
 @dataclass
@@ -91,6 +123,7 @@ class RunRecord:
     score: DiagnosisScore | None = None
     error: str = ""
     setup_detail: str = ""
+    follow_ups: list[FollowUpRecord] = field(default_factory=list)
 
     @property
     def correct(self) -> bool:
@@ -100,6 +133,7 @@ class RunRecord:
         data = asdict(self)
         data["score"] = self.score.to_dict() if self.score else None
         data["correct"] = self.correct
+        data["follow_ups"] = [f.to_dict() for f in self.follow_ups]
         return data
 
 
@@ -110,6 +144,7 @@ async def run_scenario(
     rag: bool = True,
     keep_namespace: bool = False,
     setup_timeout: int = cluster.DEFAULT_TIMEOUT_SECONDS,
+    follow_ups: bool = True,
 ) -> RunRecord:
     namespace = scenario.namespace
     record = RunRecord(
@@ -138,6 +173,11 @@ async def run_scenario(
         record.duration_seconds = round(time.monotonic() - started, 1)
         _populate_from_state(record, final_state, scenario)
         record.status = "scored"
+        # Before teardown: an "is it fixed yet?" turn needs the scenario
+        # still in its broken state.
+        if follow_ups:
+            for follow_up in scenario.follow_ups:
+                record.follow_ups.append(await _run_follow_up(follow_up, namespace, config))
     except Exception as exc:
         record.status = "agent_failed"
         record.error = f"{type(exc).__name__}: {exc}\n{traceback.format_exc(limit=3)}"
@@ -160,6 +200,25 @@ async def run_scenario(
         if not keep_namespace:
             cluster.teardown_all(scenario)
 
+    return record
+
+
+async def _run_follow_up(follow_up: FollowUp, namespace: str, config: dict) -> FollowUpRecord:
+    """Run one later turn on the scenario's thread. Failures are recorded, not raised."""
+    record = FollowUpRecord(request=follow_up.request.format(namespace=namespace), expected_route=follow_up.expected_route)
+    try:
+        started = time.monotonic()
+        final_state = await _graph.ainvoke(new_turn_input(record.request), config=config)
+        record.duration_seconds = round(time.monotonic() - started, 1)
+    except Exception as exc:
+        record.error = f"{type(exc).__name__}: {exc}"
+        return record
+    state = final_state if isinstance(final_state, AgentState) else AgentState(**final_state)
+    turn = state.turns[-1]
+    record.route = turn.route
+    record.reply = turn.reply
+    record.planner_tool_calls = sum(1 for c in turn.investigation_log if c.tool_name != INITIAL_SWEEP)
+    record.missing_signals = missing_signals(follow_up.required_signals, turn.reply)
     return record
 
 

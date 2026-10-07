@@ -129,9 +129,15 @@ def _contains(haystack: str, term: str) -> bool:
     return re.search(f"{prefix}{escaped}{suffix}", haystack, re.I) is not None
 
 
+def missing_signals(groups: tuple[tuple[str, ...], ...], text: str) -> list[list[str]]:
+    """The AND-of-ORs groups that `text` hits none of."""
+    haystack = text.lower()
+    return [list(group) for group in groups if not any(_contains(haystack, t) for t in group)]
+
+
 def check_signals(golden: GoldenLabel, text: str) -> SignalCheck:
     haystack = text.lower()
-    missing = [list(group) for group in golden.required_signals if not any(_contains(haystack, t) for t in group)]
+    missing = missing_signals(golden.required_signals, text)
     forbidden = [t for t in golden.forbidden_terms if _contains(haystack, t)]
     return SignalCheck(
         matched_groups=len(golden.required_signals) - len(missing),

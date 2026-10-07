@@ -34,6 +34,10 @@ class Summary:
     invalid_citations: int
     grounding_errors: int
     failed_scoring: int
+    follow_ups: int = 0
+    follow_ups_routed: int = 0
+    follow_ups_answered: int = 0
+    follow_ups_passed: int = 0
 
     @property
     def accuracy(self) -> float:
@@ -113,6 +117,10 @@ def summarize(records: list[RunRecord]) -> Summary:
         invalid_citations=sum(len(r.invalid_citations) for r in scored),
         grounding_errors=sum(1 for r in scored if r.grounding_error),
         failed_scoring=sum(1 for r in records if r.status == "scoring_failed"),
+        follow_ups=len(follow_ups := [f for r in scored for f in r.follow_ups]),
+        follow_ups_routed=sum(1 for f in follow_ups if f.route_correct),
+        follow_ups_answered=sum(1 for f in follow_ups if f.answered),
+        follow_ups_passed=sum(1 for f in follow_ups if f.passed),
     )
 
 
@@ -178,6 +186,8 @@ def print_report(records: list[RunRecord], summary: Summary, results_path: Path)
         if detail:
             print(f"  {record.scenario_id}: {detail}")
 
+    _print_follow_ups(records)
+
     print()
     for tier in summarize_by_tier(records):
         print(f"  {tier.line}")
@@ -196,6 +206,12 @@ def print_report(records: list[RunRecord], summary: Summary, results_path: Path)
         f"citations not in corpus {summary.invalid_citations}; "
         f"docs retrieval failed {summary.grounding_errors}x"
     )
+    if summary.follow_ups:
+        print(
+            f"follow-ups passed {summary.follow_ups_passed}/{summary.follow_ups}; "
+            f"routed as expected {summary.follow_ups_routed}/{summary.follow_ups}; "
+            f"reply had the expected signals {summary.follow_ups_answered}/{summary.follow_ups}"
+        )
     if summary.judge_fallbacks:
         print(f"judge failed {summary.judge_fallbacks}x; those verdicts fell back to the signal check")
     if summary.failed_setup or summary.failed_agent or summary.failed_scoring:
@@ -204,6 +220,24 @@ def print_report(records: list[RunRecord], summary: Summary, results_path: Path)
             f"{summary.failed_scoring} scoring error(s)"
         )
     print(f"full records: {results_path}")
+
+
+def _print_follow_ups(records: list[RunRecord]) -> None:
+    rows = [(r.scenario_id, f) for r in records if r.status == "scored" for f in r.follow_ups]
+    if not rows:
+        return
+    print()
+    print("  FOLLOW-UPS")
+    for scenario_id, f in rows:
+        mark = "PASS" if f.passed else "FAIL"
+        route = f.route or "-"
+        route_note = "" if f.route_correct else f" (expected {f.expected_route})"
+        print(f"  {mark}  {scenario_id:<11} {route}{route_note}, {f.planner_tool_calls} tool(s): {f.request!r}")
+        if f.error:
+            print(f"        error: {f.error}")
+        elif f.missing_signals:
+            missing = "; ".join("/".join(g) for g in f.missing_signals)
+            print(f"        missing signals: {missing}")
 
 
 def _failure_detail(record: RunRecord) -> str:

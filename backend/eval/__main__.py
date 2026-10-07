@@ -52,6 +52,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=cluster.DEFAULT_TIMEOUT_SECONDS,
         help=f"seconds to wait for a scenario to reach its failure state (default {cluster.DEFAULT_TIMEOUT_SECONDS})",
     )
+    parser.add_argument(
+        "--no-followups",
+        action="store_true",
+        help="run only each scenario's first turn, skipping its multi-turn follow-ups",
+    )
     parser.add_argument("--list", action="store_true", help="list scenarios and exit")
     return parser.parse_args(argv)
 
@@ -76,6 +81,7 @@ async def main_async(args: argparse.Namespace) -> int:
             rag=not args.no_rag,
             keep_namespace=args.keep,
             setup_timeout=args.setup_timeout,
+            follow_ups=not args.no_followups,
         )
         if record.status == "setup_failed":
             print(f"  setup failed: {record.error}")
@@ -84,6 +90,10 @@ async def main_async(args: argparse.Namespace) -> int:
         else:
             mark = "correct" if record.correct else "incorrect"
             print(f"  {mark} — {record.planner_tool_calls} planner tool call(s) in {record.duration_seconds:.0f}s")
+            for f in record.follow_ups:
+                verdict = "pass" if f.passed else "fail"
+                print(f"    follow-up {verdict}: routed {f.route or '-'} (expected {f.expected_route}), "
+                      f"{f.planner_tool_calls} tool call(s)")
         records.append(record)
 
     summary = summarize(records)
@@ -96,7 +106,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     if args.list:
         for scenario in get_scenarios(args.scenario):
-            print(f"{scenario.id:<15} [{scenario.difficulty:<6}] {scenario.notes}")
+            turns = f" +{len(scenario.follow_ups)} follow-up(s)" if scenario.follow_ups else ""
+            print(f"{scenario.id:<15} [{scenario.difficulty:<6}]{turns} {scenario.notes}")
         return 0
     try:
         return asyncio.run(main_async(args))

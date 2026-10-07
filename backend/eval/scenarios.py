@@ -94,6 +94,25 @@ class GoldenLabel:
 
 
 @dataclass(frozen=True)
+class FollowUp:
+    """A later turn in the same conversation, run after the first is scored.
+
+    Scored deterministically on two things: whether `intake` took the
+    expected route (answer from earlier evidence vs. investigate again),
+    and whether the reply carries `required_signals` (AND of ORs, as in
+    `GoldenLabel`). Routing is the half memory adds; a follow-up that
+    routes right but answers from evidence that never had the answer
+    still fails on signals.
+    """
+
+    # `{namespace}` is substituted at run time.
+    request: str
+    expected_route: Literal["followup", "investigate"]
+    required_signals: tuple[tuple[str, ...], ...] = ()
+    notes: str = ""
+
+
+@dataclass(frozen=True)
 class Scenario:
     id: str
     manifest_files: tuple[str, ...]
@@ -111,6 +130,9 @@ class Scenario:
     # the client manifest has to hard-code the FQDN that points at it.
     aux_namespace: str | None = None
     aux_manifest_files: tuple[str, ...] = ()
+
+    # Later turns on the same conversation thread, in order.
+    follow_ups: tuple[FollowUp, ...] = ()
 
     @property
     def ready_predicates(self) -> tuple[ReadyWhen, ...]:
@@ -364,6 +386,26 @@ SCENARIOS: tuple[Scenario, ...] = (
         ),
         difficulty="easy",
         notes="Single-hop: the Failed event names the missing Secret directly.",
+        follow_ups=(
+            FollowUp(
+                request="Which key in that Secret was the pod trying to read?",
+                expected_route="followup",
+                required_signals=(("password",),),
+                notes=(
+                    "Answerable only if turn 1's evidence includes the pod's env "
+                    "references; the Failed event names the Secret but not the key."
+                ),
+            ),
+            FollowUp(
+                request="I think I've fixed it now. Is the pod running?",
+                expected_route="investigate",
+                # Nothing was fixed, so the right answer is that it isn't.
+                required_signals=(
+                    ("still", "not running", "isn't running", "is not running", "not yet", "createcontainerconfigerror"),
+                ),
+                notes="Current-state question: answering from turn 1's evidence would be stale.",
+            ),
+        ),
     ),
     Scenario(
         id="configmap",
@@ -509,6 +551,14 @@ SCENARIOS: tuple[Scenario, ...] = (
         ),
         difficulty="medium",
         notes="Quiet failure: nothing unhealthy. Needs the Service selector compared against pod labels.",
+        follow_ups=(
+            FollowUp(
+                request="Once I've changed the selector, how can I confirm traffic is actually reaching the pods?",
+                expected_route="followup",
+                required_signals=(("endpoints", "endpointslice", "endpointslices"),),
+                notes="Explanatory: the diagnosis already establishes empty endpoints as the symptom.",
+            ),
+        ),
     ),
     Scenario(
         id="distractor",
@@ -564,6 +614,17 @@ SCENARIOS: tuple[Scenario, ...] = (
             "Anchoring A/B against `selector`: identical root cause plus a loud, "
             "genuinely-broken but irrelevant crashlooping pod. A failure here with "
             "`selector` passing means salience, not capability."
+        ),
+        follow_ups=(
+            FollowUp(
+                request="What about the report-generator pod? What's wrong with that one?",
+                expected_route="investigate",
+                required_signals=(("template",),),
+                notes=(
+                    "The second, real failure. Turn 1's sweep shows it crashlooping, "
+                    "but only its logs say why, and turn 1 had no reason to read them."
+                ),
+            ),
         ),
     ),
     Scenario(

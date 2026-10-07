@@ -47,8 +47,58 @@ def _summarize_pod(name: str, namespace: str) -> dict:
         # get_pod_status was.
         "init_container_statuses": [_status_summary(cs) for cs in (pod.status.init_container_statuses or [])],
         "container_statuses": [_status_summary(cs) for cs in (pod.status.container_statuses or [])],
+        "config_references": _config_references(pod.spec),
         "node_name": pod.spec.node_name,
     }
+
+
+def _config_references(spec) -> dict:
+    """Which Secrets/ConfigMaps the pod reads, and which keys — never values.
+
+    A CreateContainerConfigError event names the missing object but not
+    the key, so without this "which key was it looking for?" has no
+    answer in the evidence (eval's `secret` follow-up measured exactly
+    that). Literal `env[].value` strings are left out entirely: they're
+    where people inline credentials, and no reference diagnosis needs
+    them. Container ports are deliberately not exposed either — see the
+    `targetport` scenario, which measures honesty about that gap.
+    """
+    env_refs = []
+    env_from = []
+    for kind, containers in (("init", spec.init_containers or []), ("app", spec.containers or [])):
+        for c in containers:
+            for e in c.env or []:
+                source = e.value_from
+                ref = source and (source.secret_key_ref or source.config_map_key_ref)
+                if ref:
+                    env_refs.append({
+                        "container": c.name,
+                        "container_kind": kind,
+                        "env_var": e.name,
+                        "source": "secret" if source.secret_key_ref else "configmap",
+                        "name": ref.name,
+                        "key": ref.key,
+                        "optional": bool(ref.optional),
+                    })
+            for ef in c.env_from or []:
+                ref = ef.secret_ref or ef.config_map_ref
+                if ref:
+                    env_from.append({
+                        "container": c.name,
+                        "container_kind": kind,
+                        "source": "secret" if ef.secret_ref else "configmap",
+                        "name": ref.name,
+                        "optional": bool(ref.optional),
+                    })
+    volumes = []
+    for v in spec.volumes or []:
+        if v.secret:
+            volumes.append({"volume": v.name, "source": "secret", "name": v.secret.secret_name,
+                            "keys": [i.key for i in (v.secret.items or [])], "optional": bool(v.secret.optional)})
+        elif v.config_map:
+            volumes.append({"volume": v.name, "source": "configmap", "name": v.config_map.name,
+                            "keys": [i.key for i in (v.config_map.items or [])], "optional": bool(v.config_map.optional)})
+    return {"env": env_refs, "env_from": env_from, "volumes": volumes}
 
 
 def _status_summary(cs) -> dict:
